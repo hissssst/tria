@@ -1,9 +1,4 @@
 defmodule Tria.Comparator do
-
-  def size({op, _meta, args}), do: size(op) + size(args)
-  def size([lh | lt]), do: size(lh) + size(lt)
-  def size({left, right}), do: size(left) + size(right)
-  def size(_other), do: 1
   
   def [lh | lt] <~> [rh | rt] do
     lh <~> rh and lt <~> rt
@@ -20,4 +15,5 @@ defmodule Tria.Comparator do
   def left <~> right do
     left === right
   end
+  
 end

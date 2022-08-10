@@ -47,4 +47,5 @@ defmodule Tria.Pass.ConstantEvaluation do
       end
     end
   end
+
 end

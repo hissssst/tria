@@ -3,11 +3,17 @@ defmodule Tria.Translator.Elixir do
   @moduledoc """
   Elixir to Tria translator
   #TODO ignore `quote` in ast
-  #TODO translate `&` captures and closures to fn
   """
 
+  @behaviour Tria.Translator
+
   import Tria.Common
-  import Tria.Matcher
+  import Tria.Tri
+
+  def to_tria!(ast, env) do
+    {ast, _env} = expand_all(ast, env)
+    ast
+  end
 
   def to_tria(ast, env) do
     {ast, env} = expand_all(ast, env)
@@ -34,7 +40,7 @@ defmodule Tria.Translator.Elixir do
           |> add_alias(module, an_alias)
         {module, env}
 
-      tri(require something) ->
+      tri require something ->
         module = unalias(something, env)
         {module, add_require(env, module)}
 
@@ -42,7 +48,7 @@ defmodule Tria.Translator.Elixir do
         module = unalias(something, env)
         {module, add_alias(env, module, an_alias)}
 
-      tri(alias something) ->
+      tri alias something ->
         case something do
           {{:".", _, [base, :"{}"]}, _, tails} ->
             base = unalias(base, env)
@@ -60,7 +66,7 @@ defmodule Tria.Translator.Elixir do
             {module, add_alias(env, module, alias_to)}
         end
 
-      tri(import something) ->
+      tri import something ->
         module = unalias(something, env)
         {module, add_import(env, module)}
 
@@ -69,7 +75,14 @@ defmodule Tria.Translator.Elixir do
         module = unalias(something, env)
         {module, add_import(env, module, opts)}
 
-      variable when is_variable(variable) ->
+      # Variable
+      {name, meta, ctx} = variable when is_variable(variable) ->
+        variable =
+          if counter = meta[:counter] do
+            {name, [], :"#{ctx}#{counter}"}
+          else
+            {name, [], ctx}
+          end
         {variable, add_variable(env, variable)}
         
       # Collections
@@ -89,8 +102,20 @@ defmodule Tria.Translator.Elixir do
         {{map_or_tuple, meta, items}, env}
 
       # Closures
-      {:"&", _, _} ->
-        raise "Ampersand captures are not implemented"
+      {:"&", meta, body} ->
+        ctx = gen_uniq_context()
+        {body, vars} =
+          Macro.prewalk(body, [], fn
+            {:"&", _meta, [int]}, acc ->
+              v = {:"x#{int}", [], ctx}
+              {v, [v | acc]}
+
+            other, acc ->
+              {other, acc}
+          end)
+
+        vars = Enum.sort vars
+        expand_all({:fn, meta, [{:"->", [], [vars, body]}]}, env)
         
       {:fn, meta, clauses} ->
         {clauses, _internal_env} = expand_clauses(clauses, env)
@@ -197,16 +222,16 @@ defmodule Tria.Translator.Elixir do
   end
 
   defp add_import(%Macro.Env{functions: env_functions} = env, module, opts \\ []) do
-    functions = module.__info__(:functions)
-    macros = module.__info__(:macros)
+    functions = fn -> module.__info__(:functions) end
+    macros    = fn -> module.__info__(:macros) end
+
     only =
       case Keyword.fetch(opts, :only) do
-        :error -> functions ++ macros
-        {:ok, :functions} -> functions
-        {:ok, :macros} -> macros
+        :error -> functions.() ++ macros.()
+        {:ok, :functions} -> functions.()
+        {:ok, :macros} -> macros.()
         {:ok, other} -> other #TODO check for non-existing functions
       end
-
     except = Keyword.get(opts, :except, [])
 
     imported = only -- except

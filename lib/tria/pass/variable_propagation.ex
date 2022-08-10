@@ -10,7 +10,7 @@ defmodule Tria.Pass.VariablePropagation do
   """
 
   import Tria.Common
-  import Tria.Matcher
+  import Tria.Tri
 
   defmacrop l <~ r, do: quote(do: :maps.merge(unquote(l), unquote(r)))
 
@@ -63,19 +63,6 @@ defmodule Tria.Pass.VariablePropagation do
   # For
   defp do_run({:for, _meta, _iters_and_stuff}, _bindings) do
     raise "Not implemented yet"
-  end
-
-  # If
-  defp do_run({:if, _, [arg, {:do, do_clause} | maybe_else]}, bindings) do
-    else_clause = Keyword.get(maybe_else, :else)
-    {arg, bindings} = do_run(arg, bindings)
-    {do_clause, _} = do_run(do_clause, bindings)
-    {else_clause, _} = do_run(else_clause, bindings)
-
-    {
-      quote(do: if(unquote(arg), do: unquote(do_clause), else: unquote(else_clause))),
-      bindings
-    }
   end
 
   # With

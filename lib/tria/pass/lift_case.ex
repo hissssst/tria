@@ -27,7 +27,7 @@ defmodule Tria.Pass.LiftCase do
   """
 
   alias Tria.Pass.VariablePropagation
-  import Tria.Matcher
+  import Tria.Tri
   import Tria.Common
 
   def test do

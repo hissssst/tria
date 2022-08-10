@@ -1,2 +1,3 @@
 import Tria.Common
-import Tria.Matcher
+import Tria.Tri
+alias Tria.Analyzer

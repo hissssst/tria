@@ -57,9 +57,9 @@ defmodule Tria.Common do
       end
 
     if Macro.Env.in_match?(__CALLER__) do
-      quote(do: {{:., _, [unquote(module), unquote(function)]}, _, unquote(args)})
+      quote do: {{:., _, [unquote(module), unquote(function)]}, _, unquote(args)}
     else
-      quote(do: {{:., [], [unquote(module), unquote(function)]}, [], unquote(args)})
+      quote do: {{:., [], [unquote(module), unquote(function)]}, [], unquote(args)}
     end
   end
 
@@ -124,6 +124,12 @@ defmodule Tria.Common do
                   is_list(element(t, 1)) and
                   is_list(element(t, 2))
 
+  @doc """
+  Checks if passed AST is a literal (this means a value which represents itself in the AST)
+  """
+  defguard is_literal(l) when is_atom(l) or is_number(l) or is_pid(l) or is_reference(l) or
+    is_port(l)
+
   @doc "Checks if given AST is a Module.function(args, ...) call"
   @spec is_mfa(ast :: Macro.t()) :: boolean()
   def is_mfa({{:., _, [{:__aliases__, _, m}, _]}, _, _}) when is_list(m), do: true
@@ -147,11 +153,13 @@ defmodule Tria.Common do
   def unalias({:__aliases__, meta, names} = ast) when is_aliases(ast) do
     the_alias = meta[:alias]
 
-    case the_alias do
-      false -> Module.concat(names)
-      module -> module
+    if the_alias do
+      the_alias
+    else
+      Module.concat(names)
     end
   end
+  def unalias(module) when is_atom(module), do: module
 
   @doc "Generates N unique variables"
   @spec gen_uniq_vars(non_neg_integer()) :: [Tria.variable()]

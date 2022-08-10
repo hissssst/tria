@@ -6,7 +6,7 @@ defmodule Tria.Pass.EnumOptimizer do
   @common_ops ~w[filter reject map]a
 
   import Tria.Common
-  alias Tria.Pass.FnInlining
+  alias Tria.Pass.Evaluation
 
   defguardp is_filject(x) when x in ~w[filter reject]a
 
@@ -16,6 +16,7 @@ defmodule Tria.Pass.EnumOptimizer do
     steps =
       steps
       |> IO.inspect()
+      |> general()
       |> unstream()
       |> zip_maps()
       |> zip_filters()
@@ -49,18 +50,45 @@ defmodule Tria.Pass.EnumOptimizer do
 
   # Optimizers
 
+  ## Performs really simple optimizations for Enum
+
+  ### map, join to map_join
+  defp general([{Enum, :map, [func]}, {Enum, :join, joiner_or_default} | tail]) do
+    [{Enum, :map_join, joiner_or_default ++ [func]} | tail]
+  end
+
+  ### map, reduce to map_reduce
+  defp general([{Enum, :map, [func]}, {Enum, :reduce, [acc, reducer]} | tail]) do
+    reducer =
+      quote do
+        fn item, acc ->
+          new_item = unquote(func).(item)
+          new_acc = unquote(reducer).(new_item, acc)
+          {new_item, new_acc}
+        end
+      end
+      |> Evaluation.run_once!()
+
+    [{Enum, :map_reduce, [acc, reducer]} | tail]
+  end
+
+  ### fallback
+  defp general([other | tail]) do
+    [other | general(tail)]
+  end
+
   ### Zips consecutive maps
 
   defp zip_maps(steps, acc \\ nil)
 
   defp zip_maps([{mod, :map, [func]}, {mod, :map, _} = next_item | tail], nil) do
     var = {:x, [], gen_uniq_context()}
-    acc = {mod, var, FnInlining.run_once! quote(do: unquote(func).(unquote(var)))}
+    acc = {mod, var, Evaluation.run_once! quote(do: unquote(func).(unquote(var)))}
     zip_maps([next_item | tail], acc)
   end
 
   defp zip_maps([{mod, :map, [new_func]} | tail], {mod, var, body}) do
-    acc = {mod, var, FnInlining.run_once! quote(do: unquote(new_func).(unquote(body)))}
+    acc = {mod, var, Evaluation.run_once! quote(do: unquote(new_func).(unquote(body)))}
     zip_maps(tail, acc)
   end
 
@@ -103,8 +131,8 @@ defmodule Tria.Pass.EnumOptimizer do
 
   defp zip_filters([], _), do: []
 
-  defp filterify(:filter, code), do: FnInlining.run_once! code
-  defp filterify(:reject, code), do: FnInlining.run_once! quote(do: !unquote(code))
+  defp filterify(:filter, code), do: Evaluation.run_once! code
+  defp filterify(:reject, code), do: Evaluation.run_once! quote(do: !unquote(code))
 
   ### Enum.map unrolling
 
@@ -114,7 +142,7 @@ defmodule Tria.Pass.EnumOptimizer do
     else
       unrolled =
         Enum.map(arg, fn item ->
-          FnInlining.run_once! quote(do: unquote(func).(unquote(item)))
+          Evaluation.run_once! quote(do: unquote(func).(unquote(item)))
         end)
 
       {:ok, unrolled}

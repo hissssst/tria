@@ -4,8 +4,13 @@ defmodule Tria.Ternary do
   """
 
   defmacro __using__(_opts) do
+    imports =
+      __CALLER__.functions
+      |> Keyword.get(Kernel, [])
+      |> Kernel.++(Keyword.get(__CALLER__.macros, Kernel, []))
+      |> Keyword.delete(:"&&")
     quote do
-      import Kernel, except: [&&: 2]
+      import Kernel, only: unquote(imports)
       import unquote(__MODULE__)
     end
   end

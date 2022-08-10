@@ -1,35 +1,32 @@
-defmodule Tria.Matcher do
+defmodule Tria.Tri do
 
   @moduledoc """
   Code pattern-matching module
   """
 
   import Tria.Common
+  alias Tria.Translator.Elixir, as: ElixirTranslator
 
-  defmacro tri(do: code) do
-    to_pattern(code, __CALLER__)
+  defmacro tri(opts \\ [], block)
+  defmacro tri(opts, do: code) do
+    to_pattern(code, opts, __CALLER__)
+  end
+  defmacro tri(opts, code) do
+    to_pattern(code, opts, __CALLER__)
   end
 
-  defmacro tri(code) do
-    to_pattern(code, __CALLER__)
-  end
-
-  defmacro tri(:debug, do: code) do
-    to_pattern(code, __CALLER__)
-    |> inspect_ast()
-  end
-
-  defmacro tri(:debug, code) do
-    to_pattern(code, __CALLER__)
-    |> inspect_ast()
-  end
-
-  defp to_pattern(quoted, env) do
-    quoted
-    |> Macro.escape(prune_metadata: true, unquote: true)
-    # |> IO.inspect(label: :unescapeed) # After escape
-    |> Macro.prewalk(&maybe_unescape_variable/1)
-    |> traverse(env)
+  defp to_pattern(quoted, opts, env) do
+    if Macro.Env.in_match?(env) do
+      quoted
+      |> Macro.escape(prune_metadata: true, unquote: true)
+      # |> IO.inspect(label: :unescapeed) # After escape
+      |> Macro.prewalk(&maybe_unescape_variable/1)
+      |> traverse(env)
+    else
+      {:ok, quoted, _} = ElixirTranslator.to_tria(quoted, env)
+      Macro.escape quoted
+    end
+    |> tap(fn x -> if opts[:debug], do: inspect_ast(x) end)
   end
 
   # This function drops meta in escaped AST
