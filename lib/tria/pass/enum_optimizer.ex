@@ -38,7 +38,7 @@ defmodule Tria.Pass.EnumOptimizer do
     {:ok, quoted, _env} =
       quote do
         list
-        |> Stream.map(fn x -> x + 99999 end)
+        # |> Stream.map(fn x -> x + 99999 end)
         |> Enum.map(fn x -> x + 1 end)
         |> Enum.map(fn x -> x + 2 end)
         |> Enum.map(fn x -> x + 3 end)

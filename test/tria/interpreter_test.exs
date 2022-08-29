@@ -109,7 +109,7 @@ defmodule Tria.InterpreterTest do
 
       data = [:update, {1, 2}]
 
-      assert {:ok, [:update, _]} = Interpreter.matching_clause(data, clauses)
+      assert {:ok, [:update, _]} = Interpreter.multimatching_clause(data, clauses)
     end
   end
 end

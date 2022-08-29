@@ -1,65 +1,18 @@
 defmodule Tria.Common do
+
   @special_forms ~w[
     % %{} & .  :: <<>> = ^ __CALLER__ __DIR__ __ENV__ __MODULE__
     __STACKTRACE__ __aliases__ __block__ {} alias case cond fn
     for import quote receive require super try unquote unquote_splicing with
   ]a
 
+  # Guards
+
   defmacrop element(tuple, index) when is_integer(index) do
     index = index + 1
 
     quote do
       :erlang.element(unquote(index), unquote(tuple))
-    end
-  end
-
-  @doc """
-  Like IO.inspect/1 but for Elixir's AST
-  Supports `label` option
-  """
-  @spec inspect_ast(ast :: Macro.t(), Keyword.t()) :: Macro.t()
-  def inspect_ast(ast, opts \\ []) do
-    string =
-      try do
-        ast
-        |> Macro.to_string()
-        |> Code.format_string!()
-      rescue
-        _ -> Macro.to_string(ast)
-      end
-
-    if opts[:label] do
-      label = "#{opts[:label]}: "
-      label_length = length String.graphemes label
-      tab = for _ <- 1..label_length, do: " ", into: ""
-
-      "#{label}#{string}"
-      |> String.replace("\n", "\n" <> tab)
-      |> IO.puts()
-    else
-      IO.puts string
-    end
-
-    ast
-  end
-
-  @doc """
-  Public macro for MFA call AST like `Module.function(arg1, arg2, arg3)`
-  """
-  defmacro dot_call(module, function, args) do
-    module =
-      case module do
-        {:__aliases__, _, _} = aliased ->
-          Macro.expand(aliased, __ENV__)
-
-        other ->
-          other
-      end
-
-    if Macro.Env.in_match?(__CALLER__) do
-      quote do: {{:., _, [unquote(module), unquote(function)]}, _, unquote(args)}
-    else
-      quote do: {{:., [], [unquote(module), unquote(function)]}, [], unquote(args)}
     end
   end
 
@@ -100,7 +53,7 @@ defmodule Tria.Common do
                   is_list(element(t, 2))
 
   @doc """
-  Checks if passed AST is a function call or a special form
+  Checks if passed AST is a local/imported function call or a special form
   """
   defguard is_call(t)
            # and (element(t, 0) not in @special_forms)
@@ -129,6 +82,103 @@ defmodule Tria.Common do
   """
   defguard is_literal(l) when is_atom(l) or is_number(l) or is_pid(l) or is_reference(l) or
     is_port(l)
+
+  @doc """
+  Checks if passed AST is a `fn` closure
+  """
+  defguard is_fn(t)
+           when is_tuple(t) and
+                  tuple_size(t) == 3 and
+                  element(t, 0) == :fn and
+                  is_list(element(t, 1)) and
+                  is_list(element(t, 2))
+
+  # Debug
+
+  @doc """
+  Like IO.inspect/1 but for Elixir's AST
+  Supports `label` option
+  """
+  @spec inspect_ast(ast :: Macro.t(), Keyword.t()) :: Macro.t()
+  def inspect_ast(ast, opts \\ []) do
+    string =
+      try do
+        ast
+        |> then(fn ast ->
+          if Keyword.get(opts, :with_contexts, false) do
+            Macro.prewalk(ast, fn
+              {name, meta, ctx} = v when is_variable(v) and (name == :_ or ctx == nil) ->
+                {name, meta, ctx}
+
+              {name, meta, ctx} = v when is_variable(v) ->
+                {:"#{name}_#{ctx}", meta, ctx}
+
+              other ->
+                other
+            end)
+          else
+            ast
+          end
+        end)
+        |> Macro.to_string()
+        |> Code.format_string!()
+      rescue
+        _ -> Macro.to_string(ast)
+      end
+
+    if opts[:label] do
+      label = "#{opts[:label]}: "
+      label_length = length String.graphemes label
+      tab = for _ <- 1..label_length, do: " ", into: ""
+
+      "#{label}#{string}"
+      |> String.replace("\n", "\n" <> tab)
+      |> IO.puts()
+    else
+      IO.puts string
+    end
+
+    ast
+  rescue
+    e ->
+      IO.puts "\n=== Failed to inspect AST ==="
+      IO.inspect opts, pretty: true, limit: :infinity, label: :failed_to_inspect_opts
+      IO.inspect ast, pretty: true, limit: :infinity, label: :failed_to_inspect
+      IO.puts "\n"
+      reraise e, __STACKTRACE__
+  end
+
+  @doc """
+  Public macro for MFA call AST like `Module.function(arg1, arg2, arg3)`
+  """
+  defmacro dot_call(module, function, args) do
+    module =
+      case module do
+        {:__aliases__, _, _} = aliased ->
+          Macro.expand(aliased, __ENV__)
+
+        other ->
+          other
+      end
+
+    if Macro.Env.in_match?(__CALLER__) do
+      quote do: {{:., _, [unquote(module), unquote(function)]}, _, unquote(args)}
+    else
+      quote do: {{:., [], [unquote(module), unquote(function)]}, [], unquote(args)}
+    end
+  end
+
+  @doc """
+  Public macro for MFA-call AST like `Module.function(arg1, arg2, arg3)`
+  """
+  defmacro dot_call(function, args) do
+    if Macro.Env.in_match?(__CALLER__) do
+      quote do: {{:., _, [unquote(function)]}, _, unquote(args)}
+    else
+      quote do: {{:., [], [unquote(function)]}, [], unquote(args)}
+    end
+  end
+
 
   @doc "Checks if given AST is a Module.function(args, ...) call"
   @spec is_mfa(ast :: Macro.t()) :: boolean()
@@ -159,7 +209,7 @@ defmodule Tria.Common do
       Module.concat(names)
     end
   end
-  def unalias(module) when is_atom(module), do: module
+  def unalias(other), do: other
 
   @doc "Generates N unique variables"
   @spec gen_uniq_vars(non_neg_integer()) :: [Tria.variable()]
@@ -170,7 +220,12 @@ defmodule Tria.Common do
   @doc "Generates unique context"
   @spec gen_uniq_context() :: atom()
   def gen_uniq_context do
-    :"#{:erlang.unique_integer([:positive])}_tria_generated_context"
+    # Just to make debugging prettier
+    if function_exported?(Mix, :env, 0) and Mix.env() in [:dev, :test] do
+      :"c#{:erlang.unique_integer([:positive])}"
+    else
+      :"#{:erlang.unique_integer([:positive])}_tria_generated_context"
+    end
   end
 
   @spec unify_contexts(Macro.t(), %{atom() => atom()}) :: {Macro.t(), %{atom() => atom()}}
@@ -195,10 +250,6 @@ defmodule Tria.Common do
   def purge_meta({call, _meta, args}), do: {call, [], args}
   def purge_meta(other), do: other
 
-  def literal_with_vars?(l) when is_list(l) do
-    
-  end
-
   # Helpers
 
   @spec gen_uniq_vars(non_neg_integer(), atom()) :: [Macro.t()]
@@ -221,5 +272,27 @@ defmodule Tria.Common do
   def size_ast([lh | lt]), do: size_ast(lh) + size_ast(lt)
   def size_ast({left, right}), do: size_ast(left) + size_ast(right)
   def size_ast(_other), do: 1
+
+  def arityfy({{:".", _, [module, function]}, _, arguments}) do
+    arityfy {unalias(module), function, arguments}
+  end
+
+  def arityfy({module, function, arguments}) when is_list(arguments) do
+    {module, function, length(arguments)}
+  end
+
+  def arityfy({module, function, arguments}) when is_integer(arguments) do
+    {module, function, arguments}
+  end
+
+  def varctx({name, meta, context} = v) when is_variable(v) do
+    case Keyword.fetch(meta, :counter) do
+      {:ok, counter} ->
+        {name, {context, counter}}
+
+      :error ->
+        {name, context}
+    end
+  end
 
 end

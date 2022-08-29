@@ -13,16 +13,29 @@ Tria anguage differs from Elixir:
 * Only mfa
 * No macros, (even `|>`)
 * With `with`
+* No `if_undefined: :apply`
+* No counters for variables context
 
 ---
 
 ### TODO
 
-[ ] Erlang abstract format to Tria translator
+[ ] Infrastructure to enable inter-module inlinings
 
-[ ] `Enum` optimizers
+[x] Generate one module from multiple modules
+
+[T] `Enum` optimizers
+    Needs testing and purity checking
 
 [ ] Purity checking
+    Kinda
+    Needs more proper checking
+
+[T] Erlang abstract format to Tria translator
+    It works but needs testing
+
+[T] Fetch local calls in abstract->elixir->tria translator
+    Needs testing
 
 [x] Get over FUD with `Tria.Matcher`
 
@@ -32,8 +45,6 @@ Tria anguage differs from Elixir:
 
 [ ] ex->tria `&` capture
     is tricky because of `&function/2` and `&Module.function/2`
-
-[ ] Investigate NimbleParsec, perhaps this can be optimized with Tria
 
 ---
 
@@ -50,3 +61,7 @@ Tria anguage differs from Elixir:
 [ ] Map.get and family
 
 [ ] zero-arity pure functions pre-evaluation
+
+### Other ideas
+
+[ ] Investigate NimbleParsec, perhaps this can be optimized with Tria

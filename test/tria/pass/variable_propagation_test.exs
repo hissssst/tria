@@ -1,6 +1,6 @@
 defmodule Tria.Pass.VariablePropagationTest do
   use ExUnit.Case, async: true
-  import Tria.Matcher
+  import Tria.Tri
 
   alias Tria.Pass.VariablePropagation
 

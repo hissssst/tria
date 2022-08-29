@@ -11,7 +11,7 @@ defmodule Tria.Pass.Evaluation do
 
   defstruct [
     bindings: %{},
-    pure_functions: []
+    context: :regular
   ]
 
   def run_once!(ast, configuration \\ [])
@@ -21,6 +21,10 @@ defmodule Tria.Pass.Evaluation do
   def run_once!(ast, configuration) do
     {code, _bindings} = do_run(ast, configuration)
     code
+  rescue
+    e ->
+      inspect_ast(ast, label: :run_once_fail)
+      reraise e, __STACKTRACE__
   end
 
   # Block
@@ -51,7 +55,7 @@ defmodule Tria.Pass.Evaluation do
     {right, right_configuration} = do_run(right, configuration)
     {left, left_configuration} = propagate_to_pattern(left, configuration)
 
-    if Macro.quoted_literal?(right)  do
+    if Macro.quoted_literal?(right) do
       {:yes, bindings} = Interpreter.match?(left, right)
       bindings =
         Map.new(bindings, fn {{name, _, context} = v, value} when is_variable(v) ->
@@ -76,7 +80,11 @@ defmodule Tria.Pass.Evaluation do
 
     code =
       clauses
-      |> Enum.map(fn {:"->", _, [[left], right]} -> {Interpreter.match?(left, arg), left, right} end)
+      |> Enum.map(fn {:"->", _, [[left], right]} ->
+        # inspect_ast(left)
+        # inspect_ast(right)
+        {Interpreter.match?(left, arg), left, right}
+      end)
       |> filter_clauses()
       |> case do
         [{{:yes, bindings}, _pattern, body}] ->
@@ -108,7 +116,11 @@ defmodule Tria.Pass.Evaluation do
 
     {code, configuration}
   end
-  defp do_run({{".", _, [{:fn, _, clauses}]}, _, args}, configuration) do
+
+  # Fn
+  # I can't remember why I left dotted call here
+  defp do_run({{:".", _, [{:fn, _, clauses}]}, _, args}, configuration) do
+    IO.inspect args, label: :args
     {args, configuration} = do_run(args, configuration)
 
     code =
@@ -117,6 +129,7 @@ defmodule Tria.Pass.Evaluation do
       |> filter_clauses()
       |> case do
         [{{:yes, bindings}, _pattern, body}] ->
+          IO.inspect bindings, label: :successful_bindings
           bindings =
             Map.new(bindings, fn {{name, _, context} = v, value} when is_variable(v) ->
               {{name, context}, value}
@@ -145,6 +158,18 @@ defmodule Tria.Pass.Evaluation do
 
     {code, configuration}
   end
+  defp do_run({:fn, _, clauses}, configuration) do
+    clauses =
+      clauses
+      |> Enum.map(fn {:"->", _, [left, right]} ->
+        {left, new_configuration} = propagate_to_pattern(left, configuration)
+        {right, _right_configuration} = do_run(right, configuration <~ new_configuration)
+
+        {:"->", [], [left, right]}
+      end)
+
+    {{:fn, [], clauses}, configuration}
+  end
 
   # For
   defp do_run({:for, _meta, _iters_and_stuff}, _configuration) do
@@ -153,14 +178,14 @@ defmodule Tria.Pass.Evaluation do
 
   # With
   defp do_run({:with, meta, clauses}, configuration) do
-    {do_clause, clauses} = Keyword.pop!(clauses, :do)
-    {else_clauses, clauses} = Keyword.pop(clauses, :else)
+    {[{:do, do_clause} | else_clause?], clauses} = List.pop_at(clauses, -1)
+    else_clauses = Keyword.get(else_clause?, :else)
 
     {reversed_clauses, do_configuration} =
       Enum.reduce(clauses, {[], configuration}, fn
         {op, meta, [left, right]}, {clauses, configuration} ->
           {right, _} = do_run(right, configuration)
-          {left, left_configuration} = propagate_to_pattern(configuration, left)
+          {left, left_configuration} = propagate_to_pattern(left, configuration)
 
           {
             [{op, meta, [left, right]} | clauses],
@@ -171,10 +196,17 @@ defmodule Tria.Pass.Evaluation do
     clauses = Enum.reverse(reversed_clauses)
     {do_clause, _} = do_run(do_clause, do_configuration)
 
-    {tri(case(_, do: else_clauses)), _} =
-      do_run(quote(do: case(nil, do: unquote(else_clauses))), configuration)
+    # #TODO optimize else_clauses
+    # {tri(case(_, do: else_clauses)), _} =
+    #   do_run(quote(do: case(x, do: unquote(else_clauses))), configuration)
+    case else_clauses do
+      e when e in [[], nil] ->
+        {{:with, meta, clauses ++ [[do: do_clause]]}, configuration}
 
-    {{:with, meta, clauses ++ [do: do_clause, else: else_clauses]}, configuration}
+      else_clauses ->
+        {{:with, meta, clauses ++ [[do: do_clause, else: else_clauses]]}, configuration}
+    end
+
   end
 
   # Structs
@@ -188,6 +220,27 @@ defmodule Tria.Pass.Evaluation do
   end
 
   # Maps
+  defp do_run({:"%{}", _, [{:"|", _, [map, pairs]}]}, configuration) do
+    {map, map_configuration} = do_run(map, configuration)
+    pairs_with_configuration =
+      Enum.map(pairs, fn {key, value} ->
+        {do_run(key, configuration), do_run(value, configuration)}
+      end)
+
+    pairs = Enum.map(pairs_with_configuration, fn {{key, _}, {value, _}} -> {key, value} end)
+
+    configuration =
+      Enum.reduce(pairs_with_configuration, map_configuration, fn {{_, key}, {_, value}}, configuration ->
+        configuration <~ key <~ value
+      end)
+
+    {
+      # quote(do: %{unquote(map) | unquote_splicing(pairs)}),
+      {:"%{}", [], [{:"|", [], [map, pairs]}]},
+      configuration
+    }
+  end
+
   defp do_run(tri(%{tri_splicing(pairs)}), configuration) do
     pairs_with_configuration =
       Enum.map(pairs, fn {key, value} ->
@@ -234,6 +287,12 @@ defmodule Tria.Pass.Evaluation do
     {items, merge_configuration(configurations)}
   end
 
+  # defp do_run({:"|", _, [left, right]}, configuration) do
+  #   {left, left_configuration} = do_run(left, configuration)
+  #   {right, right_configuration} = do_run(right, configuration)
+  #   {{:"|", [], [left, right]}, left_configuration <~ right_configuration}
+  # end
+
   # Tuple
   defp do_run({left, right}, configuration) do
     {left, left_configuration} = do_run(left, configuration)
@@ -251,7 +310,16 @@ defmodule Tria.Pass.Evaluation do
     {args, args_configuration} = do_run(args, configuration)
     call = dot_call(module, func, args)
     if Enum.all?(args, &Macro.quoted_literal?/1) and is_pure(configuration, call) do
-      {Interpreter.eval(call), args_configuration}
+      ast =
+        case Interpreter.eval(call) do
+          {:ok, {result, []}} ->
+            Macro.escape(result)
+
+          _ ->
+            call
+        end
+
+      {ast, args_configuration}
     else
       {call, args_configuration}
     end
@@ -271,7 +339,7 @@ defmodule Tria.Pass.Evaluation do
     {args, args_configuration} = do_run(args, configuration)
     call = {func, meta, args}
     if Enum.all?(args, &Macro.quoted_literal?/1) and is_pure(configuration, call) do
-      {Interpreter.eval(call), args_configuration}
+      {Interpreter.eval!(call), args_configuration}
     else
       {call, args_configuration}
     end
@@ -288,59 +356,88 @@ defmodule Tria.Pass.Evaluation do
   # Literal
   defp do_run(other, configuration), do: {other, configuration}
 
-  # Helpers
-
-  # Double `s` in configurations is intentional
-  defp merge_configuration(configurations) when is_list(configurations) do
-    Enum.reduce(configurations, fn right, left -> left <~ right end)
-  end
-
   # Propagating to pattern
 
-  defp propagate_to_pattern({:^, _, [variable]} = pinned, configuration) when is_variable(variable) do
+  defp propagate_to_pattern(ast, old_configuration, new_configuration \\ %__MODULE__{})
+
+  defp propagate_to_pattern({:when, _, pattern_and_guard}, configuration, new_configuration) do
+    {guard, patterns} = List.pop_at(pattern_and_guard, -1)
+    {patterns, pattern_configuration} = propagate_to_pattern(patterns, configuration, new_configuration)
+
+    # Since guard doesn't create new variables, we just ignore it
+    # IO.inspect configuration <~ pattern_configuration, label: :what_the_fuck
+    {guard, _guard_configuration} = do_run(guard, configuration <~ pattern_configuration)
+
+    {{:when, [], patterns ++ [guard]}, pattern_configuration}
+  end
+
+  defp propagate_to_pattern({:^, _, [variable]} = pinned, configuration, new_configuration) when is_variable(variable) do
+    with v when not is_nil(v) <- get_bind(new_configuration, variable) do
+      raise "What the actual fuck"
+    end
+
     case get_bind(configuration, variable) do
-      nil -> {pinned, %__MODULE__{}}
-      val -> {val, %__MODULE__{}}
+      nil ->
+        {pinned, new_configuration}
+
+      val when is_variable(val) ->
+        {{:^, [], [val]}, new_configuration}
+
+      val ->
+        if Macro.quoted_literal?(val) do
+          {val, new_configuration}
+        else
+          {pinned, new_configuration}
+        end
     end
   end
 
-  defp propagate_to_pattern(variable, _configuration) when is_variable(variable) do
-    new_variable = unify(variable)
-    {new_variable, put_bind(%__MODULE__{}, variable, new_variable)}
+  defp propagate_to_pattern(variable, _configuration, new_configuration) when is_variable(variable) do
+    case get_bind(new_configuration, variable) do
+      nil ->
+        # It appears that it is the new variable
+        new_variable = unify(variable)
+        {new_variable, put_bind(new_configuration, variable, new_variable)}
+
+      variable ->
+        # It appears that the variable is present multiple times in the pattern
+        {variable, new_configuration}
+    end
   end
 
   # Call
-  defp propagate_to_pattern({n, m, items}, configuration) when is_list(items) do
-    {items, new_configuration} = propagate_to_pattern(items, configuration)
+  defp propagate_to_pattern({n, m, items}, configuration, new_configuration) when is_list(items) do
+    {items, new_configuration} = propagate_to_pattern(items, configuration, new_configuration)
     {{n, m, items}, new_configuration}
   end
 
   # List
-  defp propagate_to_pattern(items, configuration) when is_list(items) do
-    {reversed_items, new_configuration} =
-      Enum.reduce(items, {[], %__MODULE__{}}, fn item, {items, acc_configuration} ->
-        {item, new_configuration} = propagate_to_pattern(item, configuration)
-        {[item | items], acc_configuration <~ new_configuration}
-      end)
-
-    {Enum.reverse(reversed_items), new_configuration}
+  defp propagate_to_pattern(items, configuration, new_configuration) when is_list(items) do
+    Enum.map_reduce(items, new_configuration, fn item, acc_configuration ->
+      propagate_to_pattern(item, configuration, acc_configuration)
+    end)
   end
 
   # Twople
-  defp propagate_to_pattern({left, right}, configuration) do
-    {left, left_configuration} = propagate_to_pattern(left, configuration)
-    {right, right_configuration} = propagate_to_pattern(right, configuration)
+  defp propagate_to_pattern({left, right}, configuration, new_configuration) do
+    {left, new_configuration} = propagate_to_pattern(left, configuration, new_configuration)
+    {right, new_configuration} = propagate_to_pattern(right, configuration, new_configuration)
 
     {
       {left, right},
-      left_configuration <~ right_configuration
+      new_configuration
     }
   end
   
   # Literal
-  defp propagate_to_pattern(other, _configuration), do: {other, %__MODULE__{}}
+  defp propagate_to_pattern(other, _configuration, new), do: {other, new}
 
   ## Helpers for working with configuration
+
+  defp merge_configuration([]), do: %__MODULE__{}
+  defp merge_configuration(configurations) when is_list(configurations) do
+    Enum.reduce(configurations, fn right, left -> left <~ right end)
+  end
 
   defp (%{bindings: left_bindings} = left) <~ (%{bindings: right_bindings}) do
     %{left | bindings: Map.merge(left_bindings, right_bindings)}
@@ -352,12 +449,27 @@ defmodule Tria.Pass.Evaluation do
     end
   end
 
+  defp put_bind(cfg, {name, _, _}, {bind_to_name, _, _}) when :_ in [name, bind_to_name], do: cfg
   defp put_bind(%{bindings: bindings} = cfg, {name, _, context}, {bind_to_name, _, bind_to_context}) do
     %{cfg | bindings: Map.put(bindings, {name, context}, {bind_to_name, bind_to_context})}
   end
 
-  defp is_pure(configuration, dot_call(module, func, args)) do
-    Enum.all?(args, &Macro.quoted_literal?/1) and ({module, func, length(args)} in configuration.pure_functions)
+  defp is_pure(_configuration, dot_call(module, func, args)) when is_atom(module) do
+    alias Tria.Analyzer
+    alias Tria.Analyzer.Purity
+
+    with true <- Enum.all?(args, &Macro.quoted_literal?/1) do
+      tria = Analyzer.fetch_tria({module, func, args})
+      with false <- Purity.check_analyze(tria) do
+        case Purity.run_analyze(dot_call(tria, args)) do
+          {:pure, _, _} ->
+            true
+
+          _ ->
+            false
+        end
+      end
+    end
   end
   defp is_pure(_configuration, _ast), do: false
 

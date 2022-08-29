@@ -1,7 +1,7 @@
-defmodule Tria.MatcherTest do
+defmodule Tria.TriTest do
   use ExUnit.Case
   import Tria.Common
-  import Tria.Matcher
+  import Tria.Tri
 
   test "AST pattern" do
     quoted =

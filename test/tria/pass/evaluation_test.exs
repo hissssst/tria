@@ -13,7 +13,7 @@ defmodule Tria.Pass.EvaluationTest do
           y = x + x
           y + 5
         end
-        |> Evaluation.run_once!(pure_functions: [{:"Elixir.Kernel", :"+", 2}])
+        |> Evaluation.run_once!()
 
       assert 11 == evaluated
     end
@@ -25,9 +25,10 @@ defmodule Tria.Pass.EvaluationTest do
           b = 2 + 2
           a + b + x + y
         end
-        |> Evaluation.run_once!(pure_functions: [{:"Elixir.Kernel", :"+", 2}])
+        |> Evaluation.run_once!()
+        |> inspect_ast()
 
-      assert tri(7 + x + y) = evaluated
+      assert tri(Kernel.+(Kernel.+(7, x), y)) = evaluated
     end
   end
 
@@ -43,7 +44,7 @@ defmodule Tria.Pass.EvaluationTest do
             other -> other
           end
         end
-        |> Evaluation.run_once!(pure_functions: [{:"Elixir.Kernel", :"+", 2}])
+        |> Evaluation.run_once!()
 
       assert 2 == evaluated
     end
@@ -82,6 +83,151 @@ defmodule Tria.Pass.EvaluationTest do
           other -> Kernel.length(other)
         end
       end = evaluated)
+    end
+
+    test "pathex-style force_update" do
+      evaluated =
+        tri do
+          case something do
+            %{1 => x} -> x
+            [_, y | _] -> y
+            %{} -> :map
+            l when is_list(l) -> :list
+            _ -> :error
+          end
+        end
+        |> Evaluation.run_once!()
+
+      assert(tri do
+        case something do
+          %{1 => x} -> x
+          [_, y | _] -> y
+          %{} -> :map
+          l when is_list(l) -> :list
+          _ -> :error
+        end
+      end = evaluated)
+    end
+
+    test "same variable twice" do
+      evaluated =
+        tri do
+          case x do
+            [head, head] when head > 10 -> head
+          end
+        end
+        |> Evaluation.run_once!()
+
+      assert(tri do
+        case x do
+          [head, head] when head > 10 -> head
+        end
+      end = evaluated)
+    end
+
+    test "outer context in guard" do
+      evaluated =
+        tri do
+          head = something
+          case x do
+            1 when head > 10 -> :ok
+          end
+        end
+        |> Evaluation.run_once!()
+
+      assert(tri do
+        head = something
+        case x do
+          1 when head > 10 -> :ok
+        end
+      end = evaluated)
+    end
+
+    test "outer context in deeper in guard" do
+      evaluated =
+        tri do
+          case arg do
+            x when true and y > 10 and x > 10 -> :ok
+          end
+        end
+        |> inspect_ast(with_contexts: true, label: :was)
+        |> Evaluation.run_once!()
+        |> inspect_ast(with_contexts: true, label: :became)
+
+      # Why no tri, because `assert` is fucking shit
+      assert {
+        :case, _, [arg, [do: [
+          {:"->", _, [
+            [{:when, _, [x,
+              {andd, _, [
+                {andd, _, [
+                  true,
+                  {more, _, [y, 10]}
+                ]},
+                {more, _, [x, 10]}
+              ]}
+            ]}],
+            :ok
+          ]}
+        ]]]
+      } = evaluated
+    end
+  end
+
+  describe "Complex" do
+    test "GenServer" do
+      evaluated =
+        tri do
+          opts = [name: __MODULE__, restart: :always]
+          opts = Keyword.put(opts, :restart, :temporary)
+          opts = Keyword.put(opts, :option, :value)
+          GenServer.start_link(__MODULE__, [], opts)
+        end
+        |> Evaluation.run_once!()
+
+      assert(tri GenServer.start_link(__MODULE__, [], option: :value, name: __MODULE__, restart: :always) = evaluated)
+    end
+
+    test "Pathex-style fn inlining" do
+      evaluated =
+        tri do
+          (fn x, function ->
+            try do
+              {:ok,
+               case x do
+                 %{0 => value} = map ->
+                   case function.(value) do
+                     {:ok, new_value} -> %{map | 0 => new_value}
+                     :delete_me -> Map.delete(map, 0)
+                     :error -> Kernel.throw(:path_not_found)
+                   end
+
+                 [x | _] = list ->
+                   case function.(:lists.nth(1, list)) do
+                     {:ok, new_value} -> List.replace_at(list, 0, new_value)
+                     :delete_me -> List.delete_at(list, 0)
+                     :error -> Kernel.throw(:path_not_found)
+                   end
+
+                 tuple when :erlang.andalso(is_tuple(tuple), tuple_size(tuple) > 0) ->
+                   case function.(:erlang.element(1, tuple)) do
+                     {:ok, new_value} -> :erlang.setelement(1, tuple, new_value)
+                     :delete_me -> :erlang.delete_element(1, tuple)
+                     :error -> Kernel.throw(:path_not_found)
+                   end
+
+                 _ ->
+                   Kernel.throw(:path_not_found)
+               end}
+            catch
+              :path_not_found -> :error
+            end
+          end).({1, 2}, fn _ -> :delete_me end)
+        end
+        |> Evaluation.run_once!()
+        |> Evaluation.run_once!()
+        |> Evaluation.run_once!()
+        |> inspect_ast(label: :hey)
     end
   end
 

@@ -1,7 +1,7 @@
 defmodule Tria.TranslatorTest do
   use ExUnit.Case, async: true
 
-  import Tria.Matcher
+  import Tria.Tri
   alias Tria.Translator.Elixir, as: ElixirTranslator
 
   defmodule Example do

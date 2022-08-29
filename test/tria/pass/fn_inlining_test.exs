@@ -2,7 +2,7 @@ defmodule Tria.Pass.FnInliningTest do
   use ExUnit.Case
 
   import Tria.Common
-  import Tria.Matcher
+  import Tria.Tri
   alias Tria.Pass.FnInlining
 
   test "simple" do

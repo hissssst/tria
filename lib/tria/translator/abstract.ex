@@ -3,31 +3,15 @@ defmodule Tria.Translator.Abstract do
   @behaviour Tria.Translator
 
   import Tria.Common
+  alias Tria.Analyzer
   alias Tria.Translator.Elixir, as: ElixirTranslator
-
-  def test(module \\ Example) do
-    module
-    |> fetch_abstract_code()
-    |> Enum.each(fn {name, arity, clauses} ->
-      # IO.inspect clauses
-      clauses =
-        Enum.map(clauses, fn clause ->
-          traverse(clause)
-        end)
-
-      IO.inspect {name, arity}
-      if name == :size, do: IO.inspect(clauses)
-      {:fn, [], clauses} |> Macro.to_string |> IO.puts
-      IO.puts ""
-    end)
-
-  end
 
   def from_tria(_ast) do
     raise "Not implemented"
   end
 
   def to_tria(abstract, env \\ __ENV__) do
+    IO.inspect env.module
     abstract
     |> traverse()
     |> ElixirTranslator.to_tria(env)
@@ -232,8 +216,12 @@ defmodule Tria.Translator.Abstract do
           var when is_variable(var) ->
             quote do: (unquote(var)).(unquote_splicing traverse args)
 
-          func ->
-            {traverse(func), [], traverse(args)}
+          func when is_atom(func) ->
+            if {func, length(args)} in erlang_funcs() do
+              dot_call(:erlang, traverse(func), traverse(args))
+            else
+              {traverse(func), [], traverse(args)}
+            end
         end
 
       # Records
@@ -259,6 +247,7 @@ defmodule Tria.Translator.Abstract do
           name
           |> Atom.to_string()
           |> String.downcase()
+          |> remove_underscore()
           |> String.to_atom()
 
         {name, [], nil}
@@ -296,11 +285,13 @@ defmodule Tria.Translator.Abstract do
   defp traverse_block(line), do: traverse(line)
 
   defp traverse_tsl(tsl) when is_list(tsl) do
+    IO.inspect tsl, label: :tsl
     join(tsl, :"-", &traverse_tsl/1)
   end
   defp traverse_tsl({type, size}), do: {type, [], [size]}
   defp traverse_tsl(type) when is_atom(type), do: {type, [], nil}
   defp traverse_tsl(size) when is_integer(size), do: size
+  defp traverse_tsl(other), do: traverse(other)
 
   defp add_res_to_clauses(clauses) do
     [last | rev_tail] = Enum.reverse(clauses)
@@ -310,35 +301,35 @@ defmodule Tria.Translator.Abstract do
   end
 
   @op_map %{
-    ==: {Kernel, :==},
-    "/=": {Kernel, :!=},
-    "=<": {Kernel, :<=},
-    >=: {Kernel, :>=},
-    <: {Kernel, :<},
-    >: {Kernel, :>},
-    "=:=": {Kernel, :===},
-    "=/=": {Kernel, :!==},
-    +: {Kernel, :+},
-    -: {Kernel, :-},
-    *: {Kernel, :*},
-    /: {Kernel, :/},
-    div: {Kernel, :div},
-    rem: {Kernel, :rem},
-    not: {Kernel, :not},
-    orelse: {Kernel, :or},
-    andalso: {Kernel, :and},
-    and: {:erlang, :and},
-    or: {:erlang, :or},
-    xor: {:erlang, :xor},
-    ++: {Kernel, :++},
-    --: {Kernel, :--},
-    !: {Kernel, :send},
-    band: {Bitwise, :&&&},
-    bor: {Bitwise, :|||},
-    bxor: {Bitwise, :^^^},
-    bsl: {Bitwise, :<<<},
-    bsr: {Bitwise, :>>>},
-    bnot: {Bitwise, :~~~},
+    ==:      {Kernel,  :==},
+    "/=":    {Kernel,  :!=},
+    "=<":    {Kernel,  :<=},
+    >=:      {Kernel,  :>=},
+    <:       {Kernel,  :<},
+    >:       {Kernel,  :>},
+    "=:=":   {Kernel,  :===},
+    "=/=":   {Kernel,  :!==},
+    +:       {Kernel,  :+},
+    -:       {Kernel,  :-},
+    *:       {Kernel,  :*},
+    /:       {Kernel,  :/},
+    div:     {Kernel,  :div},
+    rem:     {Kernel,  :rem},
+    not:     {Kernel,  :not},
+    orelse:  {Kernel,  :or},
+    andalso: {Kernel,  :and},
+    and:     {:erlang, :and},
+    or:      {:erlang, :or},
+    xor:     {:erlang, :xor},
+    ++:      {Kernel,  :++},
+    --:      {Kernel,  :--},
+    !:       {Kernel,  :send},
+    band:    {Bitwise, :&&&},
+    bor:     {Bitwise, :|||},
+    bxor:    {Bitwise, :^^^},
+    bsl:     {Bitwise, :<<<},
+    bsr:     {Bitwise, :>>>},
+    bnot:    {Bitwise, :~~~},
   }
 
   defp traverse_op(op, args) do
@@ -349,6 +340,19 @@ defmodule Tria.Translator.Abstract do
   defp join([head], _op, f), do: f.(head)
   defp join([head | tail], op, f) do
     {op, [], [f.(head), join(tail, op, f)]}
+  end
+
+  defp remove_underscore("_" <> tail) do
+    if String.contains?(tail, "@") do
+      tail
+    else
+      "_" <> tail
+    end
+  end
+  defp remove_underscore(other), do: other
+
+  defp erlang_funcs do
+    MapSet.new Analyzer.fetch_functions :erlang
   end
 
 end

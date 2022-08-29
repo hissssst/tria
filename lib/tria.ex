@@ -7,6 +7,47 @@ defmodule Tria do
   @type special_form :: {}
   @type call :: {atom(), list(), atom()}
 
+  # Public interface
+
+  defp run_while(ast, prev \\ nil)
+  defp run_while(ast, ast), do: ast
+  defp run_while(ast, prev) do
+    if Tria.Comparator.compare(ast, prev) do
+      ast
+    else
+      # inspect_ast(ast)
+      # inspect_ast(prev)
+      # Process.sleep(1000)
+
+      if Macro.to_string(ast) == Macro.to_string(prev) do
+        require IEx
+        IEx.pry()
+      end
+
+      ast
+      |> Tria.Pass.Evaluation.run_once!()
+      |> run_while(ast)
+    end
+  end
+
+  def run(quoted, env) do
+    quoted
+    |> Tria.Translator.Elixir.to_tria!(env)
+    |> inspect_ast(label: :after_translation)
+    |> run_while()
+    |> inspect_ast(label: :result, with_contexts: true)
+    # |> IO.inspect(label: :result_ast)
+    # |> tap(fn ast ->
+    #   Macro.prewalk(ast, fn
+    #     v when is_variable(v) ->
+    #       IO.inspect v
+
+    #     other ->
+    #       other
+    #   end)
+    # end)
+  end
+
   defmacro __using__(context: context) do
     context = unalias(context)
     module = __CALLER__.module
@@ -20,6 +61,8 @@ defmodule Tria do
       @context unquote(context)
     end
   end
+
+  # Using callbacks
 
   def __on_definition__(%Macro.Env{module: module}, kind, name, args, guards, body) do
     Module.put_attribute(module, :defs, {{kind, name}, {args, guards, body}})
@@ -45,18 +88,6 @@ defmodule Tria do
 
     {:__block__, [], defs}
   end
-
-  defp join_clauses([{name, {args1, _, _} = clause1}, {name, {args2, _, _} = clause2} | tail]) do
-    if length(args1) == length(args2) do
-      join_clauses [{name, [clause1, clause2]} | tail]
-    else
-      [{name, List.flatten List.wrap clause1}, {name, List.flatten List.wrap clause2} | join_clauses tail]
-    end
-  end
-  defp join_clauses([{name, clause} | tail]) do
-    [{name, List.flatten List.wrap clause} | join_clauses tail]
-  end
-  defp join_clauses([]), do: []
 
   # GenServer
 
@@ -88,6 +119,8 @@ defmodule Tria do
     end
     {:reply, :ok, %{state | modules: mods}}
   end
+
+  # Helpers
 
   defp create_module(name, defs) do
     funcs = defs_to_funcs(defs)
@@ -125,5 +158,17 @@ defmodule Tria do
   end
 
   defp fname(_module, name), do: name
+
+  defp join_clauses([{name, {args1, _, _} = clause1}, {name, {args2, _, _} = clause2} | tail]) do
+    if length(args1) == length(args2) do
+      join_clauses [{name, [clause1, clause2]} | tail]
+    else
+      [{name, List.flatten List.wrap clause1}, {name, List.flatten List.wrap clause2} | join_clauses tail]
+    end
+  end
+  defp join_clauses([{name, clause} | tail]) do
+    [{name, List.flatten List.wrap clause} | join_clauses tail]
+  end
+  defp join_clauses([]), do: []
 
 end

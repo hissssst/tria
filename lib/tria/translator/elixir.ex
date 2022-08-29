@@ -10,9 +10,15 @@ defmodule Tria.Translator.Elixir do
   import Tria.Common
   import Tria.Tri
 
+  # Public
+
   def to_tria!(ast, env) do
     {ast, _env} = expand_all(ast, env)
     ast
+  rescue
+    e ->
+      inspect_ast(ast)
+      reraise e, __STACKTRACE__
   end
 
   def to_tria(ast, env) do
@@ -23,6 +29,8 @@ defmodule Tria.Translator.Elixir do
   # Because Tria is a subset of Elixir
   def from_tria(tria_ast), do: tria_ast
 
+  # Private
+
   # Expansion and walking the tree
   defp expand_all({:__aliases__, _, _} = aliased, env) do
     # Explicitly do this before expansion
@@ -30,6 +38,7 @@ defmodule Tria.Translator.Elixir do
   end
 
   defp expand_all(ast, env) do
+    # IO.inspect ast, label: :ast
     case Macro.expand(ast, env) do
       # Imports, aliases, requires and other stuff which changes env
       tri(require something, as: an_alias) ->
@@ -79,7 +88,7 @@ defmodule Tria.Translator.Elixir do
       {name, meta, ctx} = variable when is_variable(variable) ->
         variable =
           if counter = meta[:counter] do
-            {name, [], :"#{ctx}#{counter}"}
+            {name, [], :"#{ctx}#{inspect counter}"}
           else
             {name, [], ctx}
           end
@@ -87,10 +96,7 @@ defmodule Tria.Translator.Elixir do
         
       # Collections
       list when is_list(list) ->
-        reverse Enum.reduce(list, {[], env}, fn item, {items, env} ->
-          {item, env} = expand_all(item, env)
-          {[item | items], env}
-        end)
+        Enum.map_reduce(list, env, &expand_all/2)
 
       {l, r} ->
         {l, env} = expand_all(l, env)
@@ -102,19 +108,29 @@ defmodule Tria.Translator.Elixir do
         {{map_or_tuple, meta, items}, env}
 
       # Closures
-      {:"&", meta, body} ->
+      tri &call/arity when is_integer(arity) ->
+        {call, env} = expand_all(call, env)
+        {quote(do: &unquote(call)/unquote(arity)), env}
+
+      {:"&", meta, [body]} ->
         ctx = gen_uniq_context()
         {body, vars} =
           Macro.prewalk(body, [], fn
-            {:"&", _meta, [int]}, acc ->
+            {:"&", _meta, [int]}, acc when is_integer(int) ->
+              # TODO translate meta too
               v = {:"x#{int}", [], ctx}
-              {v, [v | acc]}
+              {v, [{int, v} | acc]}
 
             other, acc ->
               {other, acc}
           end)
 
-        vars = Enum.sort vars
+        vars =
+          vars
+          |> Enum.sort()
+          |> Enum.map(fn {_, v} -> v end)
+          |> Enum.uniq()
+
         expand_all({:fn, meta, [{:"->", [], [vars, body]}]}, env)
         
       {:fn, meta, clauses} ->
@@ -123,7 +139,13 @@ defmodule Tria.Translator.Elixir do
 
       # Flow control primitives
       {:cond, meta, [[do: clauses]]} ->
-        {clauses, _} = expand_clauses(clauses, env)
+        # cond clauses behave differently from case or fn clauses
+        clauses =
+          Enum.map(clauses, fn {:"->", meta, [[left], right]} ->
+            {left, _} = expand_all(left, env)
+            {right, _} = expand_all(right, env)
+            {:"->", meta, [[left], right]}
+          end)
         {{:cond, meta, [[do: clauses]]}, env}
 
       {:case, meta, [arg, [do: clauses]]} ->
@@ -133,8 +155,8 @@ defmodule Tria.Translator.Elixir do
 
       {:with, meta, clauses} ->
         {clauses, [doelse]} = Enum.split(clauses, -1)
-        elseclause = Keyword.get(doelse, :else, [])
         doclause = Keyword.fetch!(doelse, :do)
+        elseclause = Keyword.get(doelse, :else, [])
 
         {clauses, clauses_env} = expand_with_clauses(clauses, env)
         {doclause, _env} = expand_all(doclause, clauses_env)
@@ -153,9 +175,14 @@ defmodule Tria.Translator.Elixir do
         {args, env} = expand_all(args, env)
         {{calling_tuple, meta, args}, env}
 
+      {:=, meta, [left, right]} ->
+        {left, _env} = expand_all(left, %Macro.Env{env | context: :match})
+        {right, env} = expand_all(right, env)
+        {{:=, meta, [left, right]}, env}
+
       {name, meta, args} = ast when is_call(ast) ->
         arity = length(args)
-        case Macro.special_form?(name, arity) do
+        case special_form?(name, arity) do
           true ->
             {args, env} = expand_all(args, env)
             {{name, meta, args}, env}
@@ -167,13 +194,35 @@ defmodule Tria.Translator.Elixir do
                 {Macro.expand(dot_call(module, name, args), env), env}
 
               [{:function, module} | _] ->
-                {args, env} = expand_all(args, env)
-                {dot_call(module, name, args), env}
+                case env do
+                  # We're not in match or guard
+                  %Macro.Env{context: nil} ->
+                    {args, env} = expand_all(args, env)
+                    {dot_call(module, name, args), env}
+
+                  # We're in match or guard
+                  _ ->
+                    {args, env} = expand_all(args, env)
+                    {{name, meta, args}, env}
+                end
 
               [] ->
-                #Local function maybe?
-                {args, env} = expand_all(args, env)
-                {{name, meta, args}, env}
+                case env do
+                  # We're not in match or guard
+                  %Macro.Env{context: nil} ->
+                    #Local function maybe?
+                    {args, env} = expand_all(args, env)
+                    if defines?(env.module, name, length(args)) do
+                      {dot_call(env.module, name, args), env}
+                    else
+                      {{name, [], args}, env}
+                    end
+
+                  # We're in match or guard
+                  _ ->
+                    {args, env} = expand_all(args, env)
+                    {{name, meta, args}, env}
+                end
             end
         end
 
@@ -188,26 +237,49 @@ defmodule Tria.Translator.Elixir do
             raise "Not implemented"
         end
     end
+  rescue
+    e ->
+      if env.context do
+        IO.inspect ast, label: :failed_ast
+      end
+      reraise e, __STACKTRACE__
   end
 
   # With clauses are inherited
   defp expand_with_clauses(clauses, env) do
-    reverse Enum.reduce(clauses, {[], env}, fn
-      {:"<-", meta, [left, right]}, {clauses, env} ->
-        {left, _internal_env} = expand_all(left, env)
+    Enum.map_reduce(clauses, env, fn
+      {:"<-", meta, [left, right]}, env ->
+        [left] = expand_clause_args([left], env)
         {right, env} = expand_all(right, env)
-        {[{:"<-", meta, [left, right]} | clauses], env}
+        {{:"<-", meta, [left, right]}, env}
+
+      other, env ->
+        #FIXME not sure about this, needs testing
+        # I mean, I am not sure that env inheritance works this way
+        # inside `with`. But who the fuck knows, right?
+        expand_all(other, env)
     end)
   end
 
   # Case, fn and cond clauses have their own contexts
   defp expand_clauses(clauses, env) do
-    reverse Enum.reduce(clauses, {[], env}, fn
-      {:"->", meta, [args, body]}, {clauses, env} ->
-        {args, _internal_env} = expand_all(args, env)
+    Enum.map_reduce(clauses, env, fn
+      {:"->", meta, [args, body]}, env ->
+        args = expand_clause_args(args, env)
         {body, _internal_env} = expand_all(body, env)
-        {[{:"->", meta, [args, body]} | clauses], env}
+        {{:"->", meta, [args, body]}, env}
     end)
+  end
+
+  defp expand_clause_args([{:when, meta, args_and_guards}], env) do
+    {guards, args} = List.pop_at(args_and_guards, -1)
+    {guards, _internal_env} = expand_all(guards, %Macro.Env{env | context: :guard})
+    {args,   _internal_env} = expand_all(args,   %Macro.Env{env | context: :match})
+    [{:when, meta, args ++ [guards]}]
+  end
+  defp expand_clause_args(args, env) do
+    {args, _env} = expand_all(args, %Macro.Env{env | context: :match})
+    args
   end
 
   # Macro.Env helpers
@@ -272,10 +344,25 @@ defmodule Tria.Translator.Elixir do
         end
     end
   end
-
-  defp reverse({list, env}), do: {:lists.reverse(list), env}
+  defp unalias(other, _env), do: other
 
   defp normalize_alias_to({:__aliases__, _, modules}), do: Module.concat(modules)
   defp normalize_alias_to(module), do: Module.concat([module])
+
+  defp special_form?(:in, 2), do: true #FIXME
+  defp special_form?(:when, _), do: true
+  defp special_form?(:".", _), do: true
+  defp special_form?(name, arity), do: Macro.special_form?(name, arity)
+
+  # Checks if this function is defined anywhere
+  defp defines?(module, function, arity) do
+    if Code.ensure_loaded?(module) do
+      function_exported?(module, function, arity) or !!Tria.Analyzer.fetch_abstract({module, function, arity})
+    else
+      Enum.any?(~w[def defp defmacro defmacrop]a, &Module.defines?(module, {function, arity}, &1))
+    end
+  rescue
+    ArgumentError -> false
+  end
 
 end

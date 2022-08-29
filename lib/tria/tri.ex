@@ -2,6 +2,7 @@ defmodule Tria.Tri do
 
   @moduledoc """
   Code pattern-matching module
+  And replacement for `quote`
   """
 
   import Tria.Common
@@ -19,14 +20,19 @@ defmodule Tria.Tri do
     if Macro.Env.in_match?(env) do
       quoted
       |> Macro.escape(prune_metadata: true, unquote: true)
-      # |> IO.inspect(label: :unescapeed) # After escape
       |> Macro.prewalk(&maybe_unescape_variable/1)
       |> traverse(env)
+      |> then(fn x -> if opts[:to_tria], do: ElixirTranslator.to_tria(x, env), else: x end)
     else
-      {:ok, quoted, _} = ElixirTranslator.to_tria(quoted, env)
-      Macro.escape quoted
+      Macro.escape ElixirTranslator.to_tria!(quoted, env)
     end
-    |> tap(fn x -> if opts[:debug], do: inspect_ast(x) end)
+    |> tap(fn x ->
+      case opts[:debug] do
+        v when v in [nil, false] -> nil
+        true -> inspect_ast(x)
+        label -> inspect_ast(x, label: label)
+      end
+    end)
   end
 
   # This function drops meta in escaped AST
