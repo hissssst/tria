@@ -10,6 +10,9 @@ defmodule Tria.Analyzer.Purity do
   Runs valid code and checks if any of effect functions is called
   """
   def run_analyze(ast) do
+    # IO.puts "Run analyzing=="
+    # inspect_ast(ast)
+    # IO.puts "==============="
     me = {:me, [], nil}
     body =
       Macro.postwalk(ast, fn
@@ -57,9 +60,9 @@ defmodule Tria.Analyzer.Purity do
   Checks if effect calls are present in ast
   """
   def check_analyze(ast) do
-    # IO.puts "Analyzing ===="
-    # IO.puts Macro.to_string ast
-    # IO.puts "=============="
+    # IO.puts "Analyzing ====="
+    # inspect_ast(ast)
+    # IO.puts "==============="
     Macro.prewalk(ast, [], fn
       dot_call(m, f, a), acc ->
         mfa = {unalias(m), f, a}
@@ -119,25 +122,35 @@ defmodule Tria.Analyzer.Purity do
   end
 
   defp ask({m, f, a} = mfa) do
+    stack = Process.get(:stack, [])
     Fundb.at(fn ->
       with nil <- Fundb.lookup(mfa, :pure) do
-        res = ask("===\n#{Macro.to_string {{:".", [], [m, f]}, [], a}}\n===\nIs pure [yn] ")
+        res = ask("===\n#{Macro.to_string {{:".", [], [m, f]}, [], a}}\n===\nIs pure [y(yes); n(no); s(stack)] ", stack)
         Fundb.insert(mfa, :pure, res)
         res
       end
     end)
   end
 
-  defp ask(string) do
+  defp ask(string, stack) do
     string
     |> IO.gets()
     |> String.downcase()
     |> String.codepoints()
     |> List.first()
     |> case do
-      "y" -> true
-      "n" -> false
-      _ -> ask(string)
+      "y" ->
+        true
+
+      "n" ->
+        false
+
+      "s" ->
+        Enum.each(stack, fn {m, f, a} -> IO.puts "#{m}.#{f}/#{a}" end)
+        ask(string, stack)
+
+      _ ->
+        ask(string, stack)
     end
   end
 

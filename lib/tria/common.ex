@@ -93,6 +93,14 @@ defmodule Tria.Common do
                   is_list(element(t, 1)) and
                   is_list(element(t, 2))
 
+  @doc """
+  Checks is passed AST is a collection or something
+  """
+  defguard is_collection(c)
+           when (is_tuple(c) and (tuple_size(c) == 2 or
+             (tuple_size(c) == 3 and element(c, 0) in ~w[{} %{}]a)))
+           or is_list(c)
+
   # Debug
 
   @doc """

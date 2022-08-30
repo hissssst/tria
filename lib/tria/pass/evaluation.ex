@@ -1,8 +1,11 @@
 defmodule Tria.Pass.Evaluation do
+
   @moduledoc """
   Pass which evaluates, propagates and drops dead code in one run
   This pass performs almost no analysis and just tries to preevaluate any
   forms it comes accross
+
+  #TODO optimize try/rescue
   """
 
   import Tria.Common
@@ -78,14 +81,15 @@ defmodule Tria.Pass.Evaluation do
   defp do_run(tri(case(arg, do: clauses)), configuration) do
     {arg, configuration} = do_run(arg, configuration)
 
+    # inspect_ast(quote(do: case(unquote(arg), do: unquote(clauses))), label: :before)
+
     code =
       clauses
       |> Enum.map(fn {:"->", _, [[left], right]} ->
-        # inspect_ast(left)
-        # inspect_ast(right)
         {Interpreter.match?(left, arg), left, right}
       end)
       |> filter_clauses()
+      # |> IO.inspect(label: :after_filter)
       |> case do
         [{{:yes, bindings}, _pattern, body}] ->
           bindings =
@@ -113,6 +117,7 @@ defmodule Tria.Pass.Evaluation do
 
           {:case, [], [arg, [do: clauses]]}
       end
+      # |> inspect_ast(label: :after)
 
     {code, configuration}
   end
@@ -120,7 +125,6 @@ defmodule Tria.Pass.Evaluation do
   # Fn
   # I can't remember why I left dotted call here
   defp do_run({{:".", _, [{:fn, _, clauses}]}, _, args}, configuration) do
-    IO.inspect args, label: :args
     {args, configuration} = do_run(args, configuration)
 
     code =
@@ -129,13 +133,11 @@ defmodule Tria.Pass.Evaluation do
       |> filter_clauses()
       |> case do
         [{{:yes, bindings}, _pattern, body}] ->
-          IO.inspect bindings, label: :successful_bindings
-          bindings =
-            Map.new(bindings, fn {{name, _, context} = v, value} when is_variable(v) ->
-              {{name, context}, value}
+          configuration =
+            Enum.reduce(bindings, configuration, fn {key, value}, configuration when is_variable(key) ->
+              put_bind(configuration, key, value)
             end)
 
-          configuration = configuration <~ %__MODULE__{bindings: bindings}
           {body, _inner_configuration} = do_run(body, configuration)
           body
 
@@ -347,9 +349,13 @@ defmodule Tria.Pass.Evaluation do
 
   # Variable
   defp do_run(var, configuration) when is_variable(var) do
-    case get_bind(configuration, var) do
-      nil -> {var, configuration}
-      value -> {value, configuration}
+    case fetch_bind(configuration, var) do
+      :error ->
+        {var, configuration}
+
+      {:ok, value} ->
+        # Trick to fetch nested binds
+        do_run(value, configuration)
     end
   end
 
@@ -372,18 +378,18 @@ defmodule Tria.Pass.Evaluation do
   end
 
   defp propagate_to_pattern({:^, _, [variable]} = pinned, configuration, new_configuration) when is_variable(variable) do
-    with v when not is_nil(v) <- get_bind(new_configuration, variable) do
+    with {:ok, _} <- fetch_bind(new_configuration, variable) do
       raise "What the actual fuck"
     end
 
-    case get_bind(configuration, variable) do
-      nil ->
+    case fetch_bind(configuration, variable) do
+      :error ->
         {pinned, new_configuration}
 
-      val when is_variable(val) ->
+      {:ok, val} when is_variable(val) ->
         {{:^, [], [val]}, new_configuration}
 
-      val ->
+      {:ok, val} ->
         if Macro.quoted_literal?(val) do
           {val, new_configuration}
         else
@@ -393,13 +399,13 @@ defmodule Tria.Pass.Evaluation do
   end
 
   defp propagate_to_pattern(variable, _configuration, new_configuration) when is_variable(variable) do
-    case get_bind(new_configuration, variable) do
-      nil ->
+    case fetch_bind(new_configuration, variable) do
+      :error ->
         # It appears that it is the new variable
         new_variable = unify(variable)
         {new_variable, put_bind(new_configuration, variable, new_variable)}
 
-      variable ->
+      {:ok, variable} ->
         # It appears that the variable is present multiple times in the pattern
         {variable, new_configuration}
     end
@@ -443,25 +449,23 @@ defmodule Tria.Pass.Evaluation do
     %{left | bindings: Map.merge(left_bindings, right_bindings)}
   end
 
-  defp get_bind(%{bindings: bindings} = cfg, {name, _, context}, default \\ nil) do
-    with {bound_name, bound_context} <- Map.get(bindings, {name, context}, default) do
-      get_bind(cfg, {bound_name, [], bound_context}, {bound_name, [], bound_context})
-    end
+  defp fetch_bind(%{bindings: bindings}, {name, _, context}) do
+    Map.fetch(bindings, {name, context})
   end
 
   defp put_bind(cfg, {name, _, _}, {bind_to_name, _, _}) when :_ in [name, bind_to_name], do: cfg
-  defp put_bind(%{bindings: bindings} = cfg, {name, _, context}, {bind_to_name, _, bind_to_context}) do
-    %{cfg | bindings: Map.put(bindings, {name, context}, {bind_to_name, bind_to_context})}
+  defp put_bind(%{bindings: bindings} = cfg, {name, _, context}, value) do
+    %{cfg | bindings: Map.put(bindings, {name, context}, value)}
   end
 
-  defp is_pure(_configuration, dot_call(module, func, args)) when is_atom(module) do
-    alias Tria.Analyzer
+  defp is_pure(_configuration, dot_call(module, _, args) = dc) when is_atom(module) do
+    # alias Tria.Analyzer
     alias Tria.Analyzer.Purity
 
     with true <- Enum.all?(args, &Macro.quoted_literal?/1) do
-      tria = Analyzer.fetch_tria({module, func, args})
-      with false <- Purity.check_analyze(tria) do
-        case Purity.run_analyze(dot_call(tria, args)) do
+      # tria = Analyzer.fetch_tria({module, func, args})
+      with false <- Purity.check_analyze(dc) do
+        case Purity.run_analyze(dc) do
           {:pure, _, _} ->
             true
 

@@ -10,7 +10,7 @@ defmodule Tria.Pass.FnInlining do
   #TODO: support `when`
   """
 
-  import Tria.Common
+  # import Tria.Common
   alias Tria.Interpreter
   alias Tria.Pass.VariablePropagation
 

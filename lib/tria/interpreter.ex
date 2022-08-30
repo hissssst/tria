@@ -1,4 +1,5 @@
 defmodule Tria.Interpreter do
+
   @moduledoc """
   Helpers for partial interpreting of Tria's code
   #TODO: multimatching_clause handle matcheds
@@ -147,13 +148,20 @@ defmodule Tria.Interpreter do
         # IO.inspect binds, label: :binds
         if Enum.all?(binds, fn {_, v} -> Macro.quoted_literal?(v) end) do
           # Pre-evalute binds, because `match?` returns them in quoted form
-          binds = Enum.map(binds, fn {k, v} -> {k, eval!(v)} end)
-          case eval(conditions, binds) do
+          eval_binds =
+            Enum.map(binds, fn {{name, _, ctx} = v, value} when is_variable(v) ->
+              {{name, ctx}, eval!(value)}
+            end)
+
+          case eval(conditions, eval_binds) do
             {:ok, {true, _}} ->
               {:yes, binds}
 
-            _ ->
+            {:ok, {false, _}} ->
               :no
+
+            _ ->
+              {:maybe, binds}
           end
         else
           {:maybe, binds}
@@ -178,10 +186,12 @@ defmodule Tria.Interpreter do
   end
 
   def match?(tri([head_pattern | tail_pattern]), [head_ast | tail_ast]) do
+    IO.puts "here"
     merge(match?(head_pattern, head_ast), match?(tail_pattern, tail_ast))
   end
 
   def match?([head_pattern | tail_pattern], tri([head_ast | tail_ast])) do
+    IO.puts "here 2"
     merge(match?(head_pattern, head_ast), match?(tail_pattern, tail_ast))
   end
 
@@ -216,19 +226,68 @@ defmodule Tria.Interpreter do
   def match?({:<<>>, _, _patterns}, {:<<>>, _, _asts}) do
     raise "Binary matching is not implemented"
   end
+  
+  def match?({:%{}, _, _patterns}, {:%{}, _, [{:"|", _, _kvs}]}) do
+    raise "Maps matching not implemented"
+  end
 
-  def match?({:%{}, _, _patterns}, {:%{}, _, _asts}) do
-    raise "Maps matching is not implemented"
+  def match?({:%{}, _, patterns}, {:%{}, _, asts}) do
+    if length(patterns) > length(asts), do: throw :no
+
+    literal_keys = fn list ->
+      Enum.split_with(list, fn {k, _} -> Macro.quoted_literal?(k) end)
+    end
+
+    {literal_pattern, patterns} = literal_keys.(patterns)
+    {literal_ast, asts} = literal_keys.(asts)
+
+    literal_ast = Map.new(literal_ast)
+
+    {level_binds, hopes} =
+      Enum.reduce_while(literal_pattern, {{:yes, []}, patterns}, fn {key, pattern}, {acc, hopes} ->
+        case literal_ast do
+          %{^key => value} ->
+            {merge(acc, match?(pattern, value)), hopes}
+
+          _ ->
+            # In case we don't have a match we can just hope
+            # that it is present in non-literal-keys part of AST
+            {merge(acc, {:maybe, []}), [{key, pattern} | hopes]}
+        end
+        |> case do
+          {:no, _} = result -> {:halt, result}
+          other -> {:cont, other}
+        end
+      end)
+
+    cond do
+      length(hopes) == 0 ->
+        level_binds
+
+      length(hopes) > length(asts) ->
+        :no
+
+      true ->
+        merge({:maybe, [{:map_match, hopes, asts}]}, level_binds)
+    end
+  catch
+    :no -> :no
+  end
+
+  # Equals
+  def match?(tri(left = right), val) do
+    merge(match?(left, val), match?(right, val))
   end
 
   # Variables
   def match?(tri(^_) = pinned, val), do: {:maybe, [{pinned, val}]}
   def match?(var, val) when is_variable(var), do: {:yes, [{var, val}]}
+  def match?(pattern, var) when is_variable(var), do: {:maybe, [{pattern, var}]}
 
-  def match?(pattern, {_, _, context_or_args} = val)
-      when is_list(context_or_args) or is_atom(context_or_args) do
-    {:maybe, [{pattern, val}]}
-  end
+  # Non-variable collection on right side
+  # Because all successfull cases for collections were handled above
+  def match?(_, coll) when is_collection(coll), do: :no
+  def match?(pattern, {_, _, l} = val) when is_list(l), do: {:maybe, [{pattern, val}]}
 
   # Literals
   def match?(same, same), do: {:yes, []}

@@ -39,6 +39,12 @@ defmodule Tria.InterpreterTest do
       assert :no = Interpreter.match?(pattern, data5)
     end
 
+    test "lists 2" do
+      pattern = quote do: [x | _]
+      data = quote do: [1]
+      assert {:yes, [{{:x, _, _}, 1} | _]} = Interpreter.match?(pattern, data)
+    end
+
     test "tuples" do
       pattern1 = quote(do: {_, 2})
       data1 = quote(do: {1, 2})
@@ -110,6 +116,31 @@ defmodule Tria.InterpreterTest do
       data = [:update, {1, 2}]
 
       assert {:ok, [:update, _]} = Interpreter.multimatching_clause(data, clauses)
+    end
+
+    test "tuple when" do
+      arg = {1, 2}
+      pattern = quote(do: t when is_tuple(t) and tuple_size(t) > 0)
+
+      assert {:yes, _} = Interpreter.match?(pattern, arg)
+    end
+
+    test "map literals" do
+      pattern = quote do: %{x: _}
+      data1 = quote do: %{x: 1}
+      data2 = quote do: %{x: 1, y: 2}
+
+      assert {:yes, _} = Interpreter.match?(pattern, data1)
+      assert {:yes, _} = Interpreter.match?(pattern, data2)
+    end
+
+    test "map variables" do
+      pattern = quote do: %{x: _}
+      data1 = quote do: %{x: 1}
+      data2 = quote do: %{x: 1, y: 2}
+
+      assert {:yes, _} = Interpreter.match?(pattern, data1)
+      assert {:yes, _} = Interpreter.match?(pattern, data2)
     end
   end
 end

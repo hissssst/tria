@@ -5,6 +5,9 @@ defmodule Tria.Pass.EvaluationTest do
   import Tria.Common
   alias Tria.Pass.Evaluation
 
+  @compile :nowarn_unused_vars
+  @compile {:nowarn_unused_vars, true}
+
   describe "simple arithmetics" do
     test "constant" do
       evaluated =
@@ -227,7 +230,86 @@ defmodule Tria.Pass.EvaluationTest do
         |> Evaluation.run_once!()
         |> Evaluation.run_once!()
         |> Evaluation.run_once!()
-        |> inspect_ast(label: :hey)
+
+      assert(tri do
+        try do
+          {:ok, {2}}
+        catch
+          :path_not_found -> :error
+        end
+      end = evaluated)
+    end
+
+    test "Pathex-style fn inlining 2" do
+      evaluated =
+        tri do
+          case [1] do
+           %{0 => value} = map ->
+             case function.(value) do
+               {:ok, new_value} -> %{map | 0 => new_value}
+               :delete_me -> Map.delete(map, 0)
+               :error -> Kernel.throw(:path_not_found)
+             end
+
+           [x | _] = list ->
+             case function.(:lists.nth(1, list)) do
+               {:ok, new_value} -> List.replace_at(list, 0, new_value)
+               :delete_me -> List.delete_at(list, 0)
+               :error -> Kernel.throw(:path_not_found)
+             end
+
+           tuple when :erlang.andalso(is_tuple(tuple), tuple_size(tuple) > 0) ->
+             case function.(:erlang.element(1, tuple)) do
+               {:ok, new_value} -> :erlang.setelement(1, tuple, new_value)
+               :delete_me -> :erlang.delete_element(1, tuple)
+               :error -> Kernel.throw(:path_not_found)
+             end
+
+           _ ->
+             Kernel.throw(:path_not_found)
+          end
+        end
+        |> Evaluation.run_once!()
+        |> Evaluation.run_once!()
+        |> Evaluation.run_once!()
+        |> Evaluation.run_once!()
+
+      assert(tri do
+        case function.(1) do
+          {:ok, new_value} -> List.replace_at([1], 0, new_value)
+          :delete_me -> []
+          :error -> Kernel.throw(:path_not_found)
+        end
+      end = evaluated)
+    end
+
+    test "Pathex-style fn inlining 3" do
+      evaluated =
+        tri do
+          case {} do
+            %{0 => value} = map ->
+              case function.(value) do
+                {:ok, new_value} -> %{map | 0 => new_value}
+                :delete_me -> Map.delete(map, 0)
+                :error -> Kernel.throw(:path_not_found)
+              end
+
+            [x | _] = list ->
+              case function.(:lists.nth(1, list)) do
+                {:ok, new_value} -> List.replace_at(list, 0, new_value)
+                :delete_me -> List.delete_at(list, 0)
+                :error -> Kernel.throw(:path_not_found)
+              end
+
+            _ ->
+               Kernel.throw(:path_not_found)
+          end
+        end
+        |> Evaluation.run_once!()
+        |> Evaluation.run_once!()
+        |> Evaluation.run_once!()
+
+      assert tri(Kernel.throw(:path_not_found)) = evaluated
     end
   end
 

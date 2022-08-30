@@ -47,10 +47,8 @@ defmodule Tria.Fundb do
         with :undefined <- :ets.whereis(key) do
           if key == :pure do
             filename = ~c"#{:code.priv_dir :tria}/#{key}.ets"
-            IO.inspect filename, label: :filename
             if File.exists?(filename) do
-              IO.inspect :ets.file2tab(filename), label: :res
-              IO.inspect :ets.tab2list(key), label: key
+              {:ok, :pure} = :ets.file2tab(filename)
             else
               :ets.new(key, [:set, :public, :named_table, {:write_concurrency, true}, {:read_concurrency, true}])
               :ets.tab2file(key, filename)
