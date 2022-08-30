@@ -2,10 +2,10 @@ defmodule Tria.Pass.EnumFusion do
   import Tria.Common
 
   def run(ast, _opts \\ []) do
-    do_run(ast)
+    Macro.postwalk(ast, &go/1)
   end
 
-  defp do_run(dot_call(Enum, :map, [dot_call(Enum, :map, [enum, mapper1]), mapper2])) when not is_dot_call(enum) do
+  defp go(dot_call(Enum, :map, [dot_call(Enum, :map, [enum, mapper1]), mapper2])) when not is_dot_call(enum) do
     arg = Macro.var(:arg, nil)
 
     new_mapper = quote do
@@ -17,10 +17,10 @@ defmodule Tria.Pass.EnumFusion do
     dot_call(Enum, :map, [enum, new_mapper])
   end
 
-  defp do_run(dot_call(Enum, :map, [dot_call(Enum, :map, _) = enum, mapper])) do
-    dot_call(Enum, :map, [do_run(enum), mapper])
-    |> do_run()
+  defp go(dot_call(Enum, :map, [dot_call(Enum, :map, _) = enum, mapper])) do
+    dot_call(Enum, :map, [go(enum), mapper])
+    |> go()
   end
 
-  defp do_run(ast), do: ast
+  defp go(ast), do: ast
 end

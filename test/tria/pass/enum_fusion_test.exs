@@ -1,8 +1,8 @@
 defmodule Tria.Pass.EnumFusionTest do
   use ExUnit.Case
 
-  import Tria.Tri
   import Tria.Common
+  import Tria.Tri
 
   alias Tria.Pass.EnumFusion, as: EF
 
@@ -59,6 +59,25 @@ defmodule Tria.Pass.EnumFusionTest do
       fused = tri do
         [1,2,3]
         |> Enum.map(fn arg -> arg |> (fn arg -> arg |> (fn arg -> arg |> (fn x -> x + 1 end).() |> (fn y -> y * 2 end).() end).() |> (fn z -> z - 3 end).() end).() |> (fn w -> w / 4 end).() end)
+      end
+      |> cleanup_ast()
+
+      assert EF.run(src) == fused
+    end
+  end
+
+  describe "nested fusion" do
+    test "two times" do
+      src = tri do
+        [[1,2,3]]
+        |> Enum.map(fn x -> x |> Enum.map(fn x1 -> x1 + 1 end) |> Enum.map(fn x2 -> x2 + 2 end) end)
+        |> Enum.map(fn y -> y |> Enum.map(fn y1 -> y1 * 1 end) |> Enum.map(fn y2 -> y2 * 2 end) end)
+      end
+      |> cleanup_ast()
+
+      fused = tri do
+        [[1,2,3]]
+        |> Enum.map(fn arg -> arg |> (fn x -> x |> Enum.map(fn arg -> arg |> (fn x1 -> x1 + 1 end).() |> (fn x2 -> x2 + 2 end).() end) end).() |> (fn y -> y |> Enum.map(fn arg -> arg |> (fn y1 -> y1 * 1 end).() |> (fn y2 -> y2 * 2 end).() end) end).() end)
       end
       |> cleanup_ast()
 
