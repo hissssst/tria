@@ -36,13 +36,13 @@ defmodule Tria.Common do
                   is_list(element(t, 1)) and
                   is_atom(element(t, 2))
 
-  @doc "Checks if given AST is a pinned variable"
+  @doc "Checks if given AST is a pin"
   defguard is_pinned(t)
            when is_tuple(t) and
                   tuple_size(t) == 3 and
                   element(t, 0) == :^ and
                   is_list(element(t, 1)) and
-                  is_variable(element(t, 2))
+                  is_list(element(t, 2))
 
   @doc "Checks if given AST is an :__aliases__"
   defguard is_aliases(t)
@@ -293,6 +293,7 @@ defmodule Tria.Common do
     {module, function, arguments}
   end
 
+  @doc "Makes {name, context} pair from variable"
   def varctx({name, meta, context} = v) when is_variable(v) do
     case Keyword.fetch(meta, :counter) do
       {:ok, counter} ->
@@ -301,6 +302,11 @@ defmodule Tria.Common do
       :error ->
         {name, context}
     end
+  end
+
+  @doc "Makes variable from {name, context} pair"
+  def unvarctx({name, context}) when is_atom(name) and is_atom(context) do
+    {name, [], context}
   end
 
 end

@@ -12,9 +12,31 @@ defmodule Tria.Interpreter do
   """
 
   import Kernel, except: [&&: 2, match?: 2]
+  import Macro, only: [quoted_literal?: 1]
   import Tria.Ternary
   import Tria.Common
   import Tria.Tri
+
+  @type variable :: {atom(), list(), atom()}
+  @type pin :: {:"^", list(), [variable()]}
+
+  @typedoc "Is a type of a default left = right binding"
+  @type binding(left, right) :: {left, right}
+
+  @typedoc "Binding where value is set to the variable"
+  @type variable_binding :: binding(variable(), Macro.t())
+
+  @typedoc "Binding which binds some value to the pin"
+  @type pin_binding :: binding(pin(), Macro.t())
+  
+  @typedoc "Pattern binding"
+  @type pattern_binding :: binding(Macro.t(), Macro.t())
+
+  @typedoc "Binding which binds values of the map together"
+  @type map_binding :: {:map_match, [pattern_binding()], [pattern_binding()]}
+
+  @typedoc "Type of binding"
+  @type binding() :: variable_binding() | pin_binding() | map_binding()
 
   def eval(quoted, bindings \\ [], timeout \\ 5000) do
     # It's neccessary to run this function in a cleanest enviroment possible
@@ -51,102 +73,30 @@ defmodule Tria.Interpreter do
     result
   end
 
-  @spec matching_clause(Macro.t(), [Macro.t()], :must | :can) :: {:ok, Macro.t()} | :error
-  def matching_clause(data, clauses, confidence \\ :must) do
-    clauses
-    |> Enum.map(fn clause ->
-      answer =
-        clause
-        |> match?(data)
-        |> result_to_group()
-
-      {answer, clause}
-    end)
-    |> choose_by_confidence(confidence)
-  end
-
-  def multimatching_clause(args, [first | _] = clauses, confidence \\ :must) do
-    first_length = length(first)
-
-    if Enum.any?(clauses, &(length(&1) != first_length)) do
-      raise ArgumentError, "Clauses have different arities!"
-    end
-
-    if length(args) != first_length do
-      raise ArgumentError, "Data and clauses have different length"
-    end
-
-    clauses
-    |> Enum.map(fn clause ->
-      answer =
-        clause
-        |> Enum.zip(args)
-        |> Enum.reduce_while({:yes, []}, fn {pattern, arg}, acc ->
-          case match?(pattern, arg) do
-            :no -> {:halt, :no}
-            other -> {:cont, merge(acc, other)}
-          end
-        end)
-        |> result_to_group()
-
-      {answer, clause}
-    end)
-    |> choose_by_confidence(confidence)
-  end
-
-  defp choose_by_confidence(results, :must) do
-    results
-    |> Enum.drop_while(&Kernel.match?({:no, _}, &1))
-    |> case do
-      [{:yes, first_match} | _] -> {:ok, first_match}
-      _ -> :error
-    end
-  end
-
-  defp choose_by_confidence(results, :can) do
-    results
-    |> Enum.drop_while(&Kernel.match?({:no, _}, &1))
-    |> case do
-      [{_, first_match} | _] -> {:ok, first_match}
-      _ -> :error
-    end
-  end
-
-  def match(data, clause) do
-    quote do
-      unquote(clause) = unquote(data)
-    end
-    |> eval()
-    |> elem(1)
-  end
-
   # Multimatch?
 
+  @doc """
+  Same as `match?` but for multiple arguments, like in `fn` calls
+  """
   def multimatch?(left, right) when is_list(left) and is_list(right) do
-    left
-    |> Enum.zip(right)
-    |> Enum.reduce_while({:yes, []}, fn {left, right}, {level, matches} ->
-      with(
-        {new_level, new_matches} <- match?(left, right),
-        matches = matches ++ new_matches,
-        level = new_level && level,
-        new_level when new_level in ~w[yes maybe]a <- matches_do_not_conflict?(matches)
-      ) do
-        {:cont, {level && new_level, matches}}
-      else
-        _ -> {:halt, :no}
-      end
-    end)
+    left = quote do: {unquote_splicing(left)}
+    right = quote do: {unquote_splicing(right)}
+    match?(left, right)
   end
 
   # Match?
+
+  @doc """
+  Tries to match ast on pattern and returns the ternary result with bindings
+  """
+  @spec match?(Tria.t(), Tria.t()) :: {:yes | :maybe, [binding()]} | :no
 
   # When
   def match?({:when, _, [pattern, conditions]}, ast) do
     case match?(pattern, ast) do
       {:yes, binds} ->
         # IO.inspect binds, label: :binds
-        if Enum.all?(binds, fn {_, v} -> Macro.quoted_literal?(v) end) do
+        if Enum.all?(binds, fn {_, v} -> quoted_literal?(v) end) do
           # Pre-evalute binds, because `match?` returns them in quoted form
           eval_binds =
             Enum.map(binds, fn {{name, _, ctx} = v, value} when is_variable(v) ->
@@ -180,18 +130,18 @@ defmodule Tria.Interpreter do
     # end
   end
 
-  # List patterns
+  # Collections
+
+  # List
   def match?(tri([head_pattern | tail_pattern]), tri([head_ast | tail_ast])) do
     merge(match?(head_pattern, head_ast), match?(tail_pattern, tail_ast))
   end
 
   def match?(tri([head_pattern | tail_pattern]), [head_ast | tail_ast]) do
-    IO.puts "here"
     merge(match?(head_pattern, head_ast), match?(tail_pattern, tail_ast))
   end
 
   def match?([head_pattern | tail_pattern], tri([head_ast | tail_ast])) do
-    IO.puts "here 2"
     merge(match?(head_pattern, head_ast), match?(tail_pattern, tail_ast))
   end
 
@@ -200,17 +150,13 @@ defmodule Tria.Interpreter do
   end
 
   def match?([], []), do: {:yes, []}
-  def match?([_ | _], []), do: :no
-  def match?([], [_ | _]), do: :no
 
-  # Other collections
+  # Twople
   def match?({left_pattern, right_pattern}, {left_ast, right_ast}) do
     merge(match?(left_pattern, left_ast), match?(right_pattern, right_ast))
   end
 
-  def match?({_, _}, {:{}, _, _}), do: :no
-  def match?({:{}, _, _}, {_, _}), do: :no
-
+  # Tuple
   def match?({:{}, _, patterns}, {:{}, _, asts}) do
     if length(patterns) != length(asts) do
       :no
@@ -223,10 +169,12 @@ defmodule Tria.Interpreter do
     end
   end
 
+  # Binary
   def match?({:<<>>, _, _patterns}, {:<<>>, _, _asts}) do
     raise "Binary matching is not implemented"
   end
-  
+
+  # Map
   def match?({:%{}, _, _patterns}, {:%{}, _, [{:"|", _, _kvs}]}) do
     raise "Maps matching not implemented"
   end
@@ -235,7 +183,7 @@ defmodule Tria.Interpreter do
     if length(patterns) > length(asts), do: throw :no
 
     literal_keys = fn list ->
-      Enum.split_with(list, fn {k, _} -> Macro.quoted_literal?(k) end)
+      Enum.split_with(list, fn {k, _} -> quoted_literal?(k) end)
     end
 
     {literal_pattern, patterns} = literal_keys.(patterns)
@@ -274,19 +222,20 @@ defmodule Tria.Interpreter do
     :no -> :no
   end
 
+  # In case collections do not match
+  def match?(pattern, value) when is_collection(pattern) and is_collection(value), do: :no
+
   # Equals
-  def match?(tri(left = right), val) do
-    merge(match?(left, val), match?(right, val))
+  def match?(tri(left = right), value) do
+    merge(match?(left, value), match?(right, value))
   end
 
   # Variables
-  def match?(tri(^_) = pinned, val), do: {:maybe, [{pinned, val}]}
-  def match?(var, val) when is_variable(var), do: {:yes, [{var, val}]}
+  def match?(tri(^_) = pinned, value), do: {:maybe, [{pinned, value}]}
+  def match?({:_, _, _} = var, _) when is_variable(var), do: {:yes, []}
+  def match?(var, value) when is_variable(var), do: {:yes, [{var, value}]}
   def match?(pattern, var) when is_variable(var), do: {:maybe, [{pattern, var}]}
 
-  # Non-variable collection on right side
-  # Because all successfull cases for collections were handled above
-  def match?(_, coll) when is_collection(coll), do: :no
   def match?(pattern, {_, _, l} = val) when is_list(l), do: {:maybe, [{pattern, val}]}
 
   # Literals
@@ -295,41 +244,105 @@ defmodule Tria.Interpreter do
 
   # Helpers
 
-  defp merge({:yes, m1}, {:yes, m2}) do
-    {:yes, merge_matches(m1, m2)}
-  end
-
-  defp merge({_, m1}, {_, m2}) do
-    {:maybe, merge_matches(m1, m2)}
+  # Merges two match? results together
+  defp merge({left_level, m1}, {right_level, m2}) do
+    merge_matches(left_level && right_level, m1, m2)
   end
 
   defp merge(_, _), do: :no
 
-  defp merge_matches(left_matches, right_matches) do
-    left_matches ++ right_matches
+  #TODO This shit is not merging map matches (in fixme below)
+  defp merge_matches(level, left_matches, right_matches) do
+    all_matches =
+      left_matches
+      |> Kernel.++(right_matches)
+      |> group_matches()
+      |> Enum.to_list()
+
+    level =
+      Enum.reduce(all_matches, level, fn
+        # One value for pin or variable
+        {_key, [_]}, level ->
+          level
+
+        # Multiple values for pin or variable or pattern
+        {_key, values}, level ->
+          # In case some patterns are matched agains different values
+          # We'll just check is values match
+          #FIXME fix function calls in ast
+          values
+          |> pairs()
+          |> Enum.map(&mutual_translate/1)
+          |> Enum.reduce(level, fn {left, right}, acc ->
+            with {level, matches} <- match?(left, right) do
+              matches
+              |> Enum.flat_map(fn {l, r} -> [{l, r}, {r, l}] end)
+              |> group_matches()
+              |> IO.inspect(label: :well)
+              |> Enum.all?(fn {_, values} -> length(values) == 1 end)
+              |> case do
+                true ->
+                  acc && level
+
+                false ->
+                  throw :no
+              end
+            end
+          end)
+      end)
+
+    matches = for {k, vs} <- all_matches, v <- vs, do: {k, v}
+    {level, matches}
+  catch
+    :no -> :no
   end
 
-  defp result_to_group(:no), do: :no
-
-  defp result_to_group({level, matches}) do
-    matches_do_not_conflict?(matches) && level
-  end
-
-  defp matches_do_not_conflict?(matches) do
-    for {{name, _, ctx} = var, value} when is_variable(var) and name != :_ <- matches do
-      {{name, ctx}, value}
-    end
-    |> Enum.group_by(fn {k, _} -> k end, fn {_, v} -> v end)
-    |> Enum.reduce(:yes, fn
-      {_, [_data]}, ans ->
-        ans && :yes
-
-      {{:_, _, _}, _}, ans ->
-        ans && :yes
-
-      {_, [_head | _tail]}, ans ->
-        # FIXME
-        ans && :no
+  defp pairs([]), do: []
+  defp pairs([_]), do: []
+  defp pairs([head | tail]) do
+    Enum.reduce(tail, pairs(tail), fn item, pairs ->
+      [{head, item} | pairs]
     end)
+  end
+
+  defp group_matches(matches) do
+    matches
+    |> Enum.filter(& Kernel.match?({_, _}, &1)) #FIXME read todo above
+    |> Enum.group_by(fn {k, _} -> k end, fn {_, v} -> v end)
+    |> Stream.map(fn {key, values} -> {key, Enum.uniq values} end) # Streaming to lazily iterate over it
+  end
+
+  # Here I use counters, but all of this will be dropped later
+  defp mutual_translate({left, right}) do
+    {left, translations} =
+      Macro.prewalk(left, %{}, fn
+        {_, _, args} = ast, translations when is_list(args) ->
+          if is_special_form(ast) do
+            {ast, translations}
+          else
+            var = {:var, [counter: :erlang.unique_integer()], nil}
+            {var, Map.put(translations, ast, var)}
+          end
+
+        other, translations ->
+          {other, translations}
+      end)
+
+    right =
+      Macro.prewalk(right, fn
+        {_, _, args} = ast when is_list(args) ->
+          if is_special_form(ast) do
+            ast
+          else
+            Map.get_lazy(translations, ast, fn ->
+              {:var, [counter: :erlang.unique_integer()], nil}
+            end)
+          end
+
+        other ->
+          other
+      end)
+
+    {left, right}
   end
 end

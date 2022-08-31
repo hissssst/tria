@@ -175,6 +175,20 @@ defmodule Tria.Pass.EvaluationTest do
         ]]]
       } = evaluated
     end
+
+    test "either case" do
+      evaluated =
+        tri do
+          case {:ok, 4} do
+            {:ok, value} -> value
+            :error -> raise "error"
+          end
+        end
+        |> Evaluation.run_once!()
+        |> Evaluation.run_once!()
+
+      assert 4 == evaluated
+    end
   end
 
   describe "Complex" do

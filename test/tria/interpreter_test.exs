@@ -142,5 +142,17 @@ defmodule Tria.InterpreterTest do
       assert {:yes, _} = Interpreter.match?(pattern, data1)
       assert {:yes, _} = Interpreter.match?(pattern, data2)
     end
+
+    test "difficult intersections" do
+      pattern = quote do: {same, same}
+      data = quote do: {%{x: x, z: 1}, %{x: 2, z: x}}
+
+      assert :no = Interpreter.match?(pattern, data)
+
+      pattern = quote do: {same, same}
+      data = quote do: {%{x: {x, x}, z: foo()}, %{x: foo(), z: {x, x, x}}}
+
+      assert :no = Interpreter.match?(pattern, data)
+    end
   end
 end

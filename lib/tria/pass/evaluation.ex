@@ -55,8 +55,45 @@ defmodule Tria.Pass.Evaluation do
 
   # Equals
   defp do_run(tri(left = right), configuration) do
-    {right, right_configuration} = do_run(right, configuration)
     {left, left_configuration} = propagate_to_pattern(left, configuration)
+    {right, right_configuration} = do_run(right, configuration)
+
+    case Interpreter.match?(left, right) do
+      {:yes, bindings} ->
+        {configuration, binds} =
+          Enum.reduce(bindings, {configuration <~ left_configuration, []}, fn
+            {variable, value} = bind, {configuration, binds} ->
+              cond do
+                Macro.quoted_literal?(value) or is_variable(value) ->
+                  {put_bind(configuration, variable, value), binds}
+
+                is_fn(value) ->
+                  {put_bind(configuration, variable, value), [bind_to_equal(bind) | binds]}
+
+                true ->
+                  {configuration, [bind_to_equal(bind) | binds]}
+              end
+          end)
+
+        body =
+          quote do
+            unquote_splicing(binds)
+            unquote(right)
+          end
+        {body, configuration}
+
+      :no ->
+        IO.warn "This bind will never match"
+        body = quote do: raise "Will never match"
+        {body, configuration <~ right_configuration <~ left_configuration}
+
+      {:maybe, _} ->
+        #TODO relax matching
+        {
+          quote(do: unquote(left) = unquote(right)),
+          configuration <~ right_configuration <~ left_configuration
+        }
+    end
 
     if Macro.quoted_literal?(right) do
       {:yes, bindings} = Interpreter.match?(left, right)
@@ -497,5 +534,13 @@ defmodule Tria.Pass.Evaluation do
   defp filter_clauses([{:no, _, _} | tail]), do: filter_clauses(tail)
   defp filter_clauses([other | tail]), do: [other | filter_clauses(tail)]
   defp filter_clauses([]), do: []
+
+  defp bind_to_equal({left, right}) do
+    quote do: unquote(left) = unquote(right)
+  end
+
+  defp binds_to_block(binds) do
+    {:__block__, [], Enum.map(binds, &bind_to_equal/1)}
+  end
 
 end

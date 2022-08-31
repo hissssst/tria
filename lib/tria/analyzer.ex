@@ -2,7 +2,7 @@ defmodule Tria.Analyzer do
 
   import Tria.Common
 
-  alias Tria.Fundb
+  alias Tria.FunctionRepo
   alias Tria.Translator.Abstract, as: AbstractTranslator
 
   @moduledoc """
@@ -42,7 +42,7 @@ defmodule Tria.Analyzer do
 
   def fetch_tria(mfa) do
     {module, _, _} = arityfy mfa
-    case Fundb.lookup(mfa, :tria) do
+    case FunctionRepo.lookup(mfa, :tria) do
       nil ->
         case fetch_abstract(mfa) do
           nil ->
@@ -51,7 +51,7 @@ defmodule Tria.Analyzer do
           abstract ->
             {:ok, tria, _} = AbstractTranslator.to_tria(abstract, %Macro.Env{__ENV__ | module: module})
             tria = {:fn, [], tria}
-            Fundb.insert(mfa, :tria, tria)
+            FunctionRepo.insert(mfa, :tria, tria)
             tria
         end
 
@@ -62,28 +62,28 @@ defmodule Tria.Analyzer do
 
   # Guarded because I want to raise ASAP
   def fetch_abstract({module, _, _} = mfa) when is_atom(module) do
-    with nil <- Fundb.lookup(mfa, :abstract) do
+    with nil <- FunctionRepo.lookup(mfa, :abstract) do
       prefetch_clauses(module)
       fetch_abstract_from_db(mfa)
     end
   end
 
   def fetch_abstract_from_db(mfa) do
-    Fundb.lookup(mfa, :abstract)
+    FunctionRepo.lookup(mfa, :abstract)
   end
 
   def fetch_functions(module) do
     prefetch_clauses(module)
 
     :abstract
-    |> Fundb.select_by(module: module)
+    |> FunctionRepo.select_by(module: module)
     |> Enum.map(fn {{_, f, a}, _} -> {f, a} end)
   end
 
   defp prefetch_clauses(module) do
     with {:ok, ac} <- fetch_abstract_code(module) do
       for {:function, _anno, name, arity, clauses} <- ac do
-        Fundb.insert({module, name, arity}, :abstract, clauses)
+        FunctionRepo.insert({module, name, arity}, :abstract, clauses)
       end
     end
   end
