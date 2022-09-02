@@ -24,6 +24,10 @@ Tria anguage differs from Elixir:
 
 [x] Generate one module from multiple modules
 
+[ ] fn to case translation is incorrect
+    Needs some rethinking because they raise different errors
+    Maybe extra clause?
+
 [T] `Enum` optimizers
     Needs testing and purity checking
 
@@ -43,7 +47,7 @@ Tria anguage differs from Elixir:
 
 [x] ex->tria macro_expansion
 
-[ ] ex->tria `&` capture
+[x] ex->tria `&` capture
     is tricky because of `&function/2` and `&Module.function/2`
 
 ---

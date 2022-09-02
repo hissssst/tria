@@ -3,44 +3,33 @@ defmodule Tria.Analyzer.Purity do
   import Tria.Common
   import Tria.Tri
 
+  alias Tria.Interpreter
   alias Tria.{Analyzer, FunctionRepo}
   alias Tria.Analyzer.Purity.Provider
 
   @doc """
-  Runs valid code and checks if any of effect functions is called
+  Runs valid code and checks if any of effect functions is called.
+  It replaces all possible impure calls with sends and gathers
+  all effects called
   """
   def run_analyze(ast) do
-    me = {:me, [], nil}
-    body =
-      Macro.postwalk(ast, fn
+    {type, result} = 
+      ast
+      |> Macro.postwalk(fn
         dot_call(m, f, a) = mfa ->
           if lookup {m, f, a} do
             mfa
           else
-            quote do: send(unquote(me), {:effect, unquote Macro.escape mfa})
+            quote do: send(self(), {:effect, unquote Macro.escape mfa})
           end
 
         other ->
           other
       end)
-
-    body =
-      quote do
-        unquote(me) = self()
-        unquote(body)
-      end
-
-    {type, result} =
-      try do
-        {:ok, Code.eval_quoted(body, [])}
-      rescue
-        error -> {:error, error}
-      catch
-        :exit, exit -> {:exit, exit}
-        thrown -> {:thrown, thrown}
-      end
+      |> Interpreter.eval_local()
 
     effects = fetch_effects()
+
     case type do
       :ok when effects == [] ->
         {:pure, result, effects}
@@ -89,15 +78,15 @@ defmodule Tria.Analyzer.Purity do
         case Analyzer.fetch_tria(mfa) do
           # No function found
           nil ->
-            ask(mfa)
+            Provider.is_pure(mfa, stack: stack)
 
           # Is a NIF or BIF function
           {:fn, _, [{:"->", _, [_, dot_call(:erlang, :nif_error, _)]}]} ->
-            ask(mfa)
+            Provider.is_pure(mfa, stack: stack)
 
           # Is an Elixir bootstrap
           {:fn, _, [{:"->", _, [_, ^dotted]}]} ->
-            ask(mfa)
+            Provider.is_pure(mfa, stack: stack)
 
           ast ->
             # IO.inspect mfa
@@ -115,11 +104,6 @@ defmodule Tria.Analyzer.Purity do
       {:effect, effect} -> [effect | fetch_effects()]
       after 0 -> []
     end
-  end
-
-  defp ask(mfa) do
-    stack = Process.get(:stack, [])
-    Provider.is_pure(mfa, stack: stack)
   end
   
 end

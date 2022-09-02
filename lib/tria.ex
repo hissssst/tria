@@ -9,26 +9,8 @@ defmodule Tria do
 
   # Public interface
 
-  defp run_while(ast, prev \\ nil)
-  defp run_while(ast, ast), do: ast
-  defp run_while(ast, prev) do
-    if Tria.Comparator.compare(ast, prev) do
-      ast
-    else
-      # inspect_ast(ast)
-      # inspect_ast(prev)
-      # Process.sleep(1000)
-
-      if Macro.to_string(ast) == Macro.to_string(prev) do
-        require IEx
-        IEx.pry()
-      end
-
-      ast
-      |> Tria.Pass.Evaluation.run_once!()
-      |> run_while(ast)
-    end
-  end
+  defmacro tria(do: body), do: run(body, __CALLER__)
+  defmacro tria(body), do: run(body, __CALLER__)
 
   def run(quoted, env) do
     quoted
@@ -170,5 +152,26 @@ defmodule Tria do
     [{name, List.flatten List.wrap clause} | join_clauses tail]
   end
   defp join_clauses([]), do: []
+
+  defp run_while(ast, prev \\ nil)
+  defp run_while(ast, ast), do: ast
+  defp run_while(ast, prev) do
+    if Tria.Comparator.compare(ast, prev) do
+      ast
+    else
+      # inspect_ast(ast)
+      # inspect_ast(prev)
+      # Process.sleep(1000)
+
+      if Macro.to_string(ast) == Macro.to_string(prev) do
+        require IEx
+        IEx.pry()
+      end
+
+      ast
+      |> Tria.Pass.Evaluation.run_once!()
+      |> run_while(ast)
+    end
+  end
 
 end

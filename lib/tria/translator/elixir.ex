@@ -1,7 +1,11 @@
 defmodule Tria.Translator.Elixir do
 
   @moduledoc """
-  Elixir to Tria translator
+  Elixir to Tria translator.
+  Expands macro
+  Removes `&` captures
+  Removes structures syntax
+  Expands aliases, etc
   #TODO ignore `quote` in ast
   """
 
@@ -106,6 +110,12 @@ defmodule Tria.Translator.Elixir do
       {map_or_tuple, meta, items} when map_or_tuple in ~w[{} %{}]a ->
         {items, env} = expand_all(items, env)
         {{map_or_tuple, meta, items}, env}
+
+      # Structures
+      tri %module{tri_splicing items} ->
+        {items, env} = expand_all(items, env)
+        q = quote do: %{unquote_splicing [{:__struct__, module} | items]}
+        {q, env}
 
       # Closures
       tri &call/arity when is_integer(arity) ->

@@ -24,6 +24,7 @@ defmodule Tria.FunctionRepo.Persister do
   def init(opts) do
     state = %{
       timeout: Keyword.get(opts, :timeout, 100),
+      timer: nil,
       filetables: Keyword.get(opts, :filetables, %{})
     }
 

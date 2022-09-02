@@ -3,15 +3,15 @@ defmodule Tria.Interpreter do
   @moduledoc """
   Helpers for partial interpreting of Tria's code
   #TODO: multimatching_clause handle matcheds
-  #TODO: match? handle whens
-  #TODO: match? handle maps
-  #TODO: match? handle structures
-  #TODO: match? handle binaries
-  #TODO: match? handle fn
+  #TODO: match handle whens
+  #TODO: match handle maps
+  #TODO: match handle structures
+  #TODO: match handle binaries
+  #TODO: match handle fn
   #TODO: matches_conflict? improve
   """
 
-  import Kernel, except: [&&: 2, match?: 2]
+  import Kernel, except: [&&: 2]
   import Macro, only: [quoted_literal?: 1]
   import Tria.Ternary
   import Tria.Common
@@ -45,16 +45,7 @@ defmodule Tria.Interpreter do
     caller = self()
     pid =
       spawn fn ->
-        result =
-          try do
-            {:ok, Code.eval_quoted(quoted, bindings)}
-          rescue
-            error -> {:error, error}
-          catch
-            :exit, exit -> {:exit, exit}
-            thrown -> {:thrown, thrown}
-          end
-
+        result = eval_local(quoted, bindings)
         send(caller, {ref, result})
       end
 
@@ -63,8 +54,19 @@ defmodule Tria.Interpreter do
         result
 
       after timeout ->
-        Process.exit(pid, :brutal_kill)
+        Process.exit(pid, :kill)
         raise "Timeout on evaluation"
+    end
+  end
+
+  def eval_local(quoted, bindings \\ []) do
+    try do
+      {:ok, Code.eval_quoted(quoted, bindings)}
+    rescue
+      error -> {:error, error}
+    catch
+      :exit, exit -> {:exit, exit}
+      thrown -> {:thrown, thrown}
     end
   end
 
@@ -73,15 +75,21 @@ defmodule Tria.Interpreter do
     result
   end
 
-  # Multimatch?
+  # Multimatch
 
   @doc """
-  Same as `match?` but for multiple arguments, like in `fn` calls
+  Same as `match` but for multiple arguments, like in `fn` calls
   """
-  def multimatch?(left, right) when is_list(left) and is_list(right) do
+  def multimatch([{:when, _, [lefts]}], right) do
+    {guard, left} = List.pop_at(lefts, -1)
+    left = quote do: {unquote_splicing(left)} when unquote(guard)
+    right = quote do: {unquote_splicing(right)}
+    match(left, right)
+  end
+  def multimatch(left, right) when is_list(left) and is_list(right) do
     left = quote do: {unquote_splicing(left)}
     right = quote do: {unquote_splicing(right)}
-    match?(left, right)
+    match(left, right)
   end
 
   # Match?
@@ -89,15 +97,15 @@ defmodule Tria.Interpreter do
   @doc """
   Tries to match ast on pattern and returns the ternary result with bindings
   """
-  @spec match?(Tria.t(), Tria.t()) :: {:yes | :maybe, [binding()]} | :no
+  @spec match(Tria.t(), Tria.t()) :: {:yes | :maybe, [binding()]} | :no
 
   # When
-  def match?({:when, _, [pattern, conditions]}, ast) do
-    case match?(pattern, ast) do
+  def match({:when, _, [pattern, conditions]}, ast) do
+    case match(pattern, ast) do
       {:yes, binds} ->
         # IO.inspect binds, label: :binds
         if Enum.all?(binds, fn {_, v} -> quoted_literal?(v) end) do
-          # Pre-evalute binds, because `match?` returns them in quoted form
+          # Pre-evalute binds, because `match` returns them in quoted form
           eval_binds =
             Enum.map(binds, fn {{name, _, ctx} = v, value} when is_variable(v) ->
               {{name, ctx}, eval!(value)}
@@ -125,7 +133,7 @@ defmodule Tria.Interpreter do
         :no
     end
     # raise "Not implemented"
-    # with {level, matches} <- match?(pattern) do
+    # with {level, matches} <- match(pattern) do
     #   {level, matches} && match_when?(matches, conditions)
     # end
   end
@@ -133,53 +141,53 @@ defmodule Tria.Interpreter do
   # Collections
 
   # List
-  def match?(tri([head_pattern | tail_pattern]), tri([head_ast | tail_ast])) do
-    merge(match?(head_pattern, head_ast), match?(tail_pattern, tail_ast))
+  def match(tri([head_pattern | tail_pattern]), tri([head_ast | tail_ast])) do
+    merge(match(head_pattern, head_ast), match(tail_pattern, tail_ast))
   end
 
-  def match?(tri([head_pattern | tail_pattern]), [head_ast | tail_ast]) do
-    merge(match?(head_pattern, head_ast), match?(tail_pattern, tail_ast))
+  def match(tri([head_pattern | tail_pattern]), [head_ast | tail_ast]) do
+    merge(match(head_pattern, head_ast), match(tail_pattern, tail_ast))
   end
 
-  def match?([head_pattern | tail_pattern], tri([head_ast | tail_ast])) do
-    merge(match?(head_pattern, head_ast), match?(tail_pattern, tail_ast))
+  def match([head_pattern | tail_pattern], tri([head_ast | tail_ast])) do
+    merge(match(head_pattern, head_ast), match(tail_pattern, tail_ast))
   end
 
-  def match?([head_pattern | tail_pattern], [head_ast | tail_ast]) do
-    merge(match?(head_pattern, head_ast), match?(tail_pattern, tail_ast))
+  def match([head_pattern | tail_pattern], [head_ast | tail_ast]) do
+    merge(match(head_pattern, head_ast), match(tail_pattern, tail_ast))
   end
 
-  def match?([], []), do: {:yes, []}
+  def match([], []), do: {:yes, []}
 
   # Twople
-  def match?({left_pattern, right_pattern}, {left_ast, right_ast}) do
-    merge(match?(left_pattern, left_ast), match?(right_pattern, right_ast))
+  def match({left_pattern, right_pattern}, {left_ast, right_ast}) do
+    merge(match(left_pattern, left_ast), match(right_pattern, right_ast))
   end
 
   # Tuple
-  def match?({:{}, _, patterns}, {:{}, _, asts}) do
+  def match({:{}, _, patterns}, {:{}, _, asts}) do
     if length(patterns) != length(asts) do
       :no
     else
       patterns
       |> Enum.zip(asts)
       |> Enum.reduce({:yes, []}, fn {pattern, ast}, acc ->
-        merge(acc, match?(pattern, ast))
+        merge(acc, match(pattern, ast))
       end)
     end
   end
 
   # Binary
-  def match?({:<<>>, _, _patterns}, {:<<>>, _, _asts}) do
+  def match({:<<>>, _, _patterns}, {:<<>>, _, _asts}) do
     raise "Binary matching is not implemented"
   end
 
   # Map
-  def match?({:%{}, _, _patterns}, {:%{}, _, [{:"|", _, _kvs}]}) do
+  def match({:%{}, _, _patterns}, {:%{}, _, [{:"|", _, _kvs}]}) do
     raise "Maps matching not implemented"
   end
 
-  def match?({:%{}, _, patterns}, {:%{}, _, asts}) do
+  def match({:%{}, _, patterns}, {:%{}, _, asts}) do
     if length(patterns) > length(asts), do: throw :no
 
     literal_keys = fn list ->
@@ -195,7 +203,7 @@ defmodule Tria.Interpreter do
       Enum.reduce_while(literal_pattern, {{:yes, []}, patterns}, fn {key, pattern}, {acc, hopes} ->
         case literal_ast do
           %{^key => value} ->
-            {merge(acc, match?(pattern, value)), hopes}
+            {merge(acc, match(pattern, value)), hopes}
 
           _ ->
             # In case we don't have a match we can just hope
@@ -223,28 +231,28 @@ defmodule Tria.Interpreter do
   end
 
   # In case collections do not match
-  def match?(pattern, value) when is_collection(pattern) and is_collection(value), do: :no
+  def match(pattern, value) when is_collection(pattern) and is_collection(value), do: :no
 
   # Equals
-  def match?(tri(left = right), value) do
-    merge(match?(left, value), match?(right, value))
+  def match(tri(left = right), value) do
+    merge(match(left, value), match(right, value))
   end
 
   # Variables
-  def match?(tri(^_) = pinned, value), do: {:maybe, [{pinned, value}]}
-  def match?({:_, _, _} = var, _) when is_variable(var), do: {:yes, []}
-  def match?(var, value) when is_variable(var), do: {:yes, [{var, value}]}
-  def match?(pattern, var) when is_variable(var), do: {:maybe, [{pattern, var}]}
+  def match(tri(^_) = pinned, value), do: {:maybe, [{pinned, value}]}
+  def match({:_, _, _} = var, _) when is_variable(var), do: {:yes, []}
+  def match(var, value) when is_variable(var), do: {:yes, [{var, value}]}
+  def match(pattern, var) when is_variable(var), do: {:maybe, [{pattern, var}]}
 
-  def match?(pattern, {_, _, l} = val) when is_list(l), do: {:maybe, [{pattern, val}]}
+  def match(pattern, {_, _, l} = val) when is_list(l), do: {:maybe, [{pattern, val}]}
 
   # Literals
-  def match?(same, same), do: {:yes, []}
-  def match?(_, _), do: :no
+  def match(same, same), do: {:yes, []}
+  def match(_, _), do: :no
 
   # Helpers
 
-  # Merges two match? results together
+  # Merges two match results together
   defp merge({left_level, m1}, {right_level, m2}) do
     merge_matches(left_level && right_level, m1, m2)
   end
@@ -253,11 +261,18 @@ defmodule Tria.Interpreter do
 
   #TODO This shit is not merging map matches (in fixme below)
   defp merge_matches(level, left_matches, right_matches) do
+    # It is a list of all key to value bindings
     all_matches =
       left_matches
       |> Kernel.++(right_matches)
-      |> group_matches()
-      |> Enum.to_list()
+      |> Enum.filter(& match?({_, _}, &1))
+      |> Enum.group_by(fn {k, _} -> k end, fn {_, v} -> v end)
+      |> Enum.map(fn {key, values} -> {key, Enum.uniq values} end)
+
+    map_matches =
+      left_matches
+      |> Kernel.++(right_matches)
+      |> Enum.filter(& match?({:map_match, _, _}, &1))
 
     level =
       Enum.reduce(all_matches, level, fn
@@ -274,19 +289,23 @@ defmodule Tria.Interpreter do
           |> pairs()
           |> Enum.map(&mutual_translate/1)
           |> Enum.reduce(level, fn {left, right}, acc ->
-            with {level, matches} <- match?(left, right) do
-              matches
-              |> Enum.flat_map(fn {l, r} -> [{l, r}, {r, l}] end)
-              |> group_matches()
-              |> IO.inspect(label: :well)
-              |> Enum.all?(fn {_, values} -> length(values) == 1 end)
-              |> case do
-                true ->
-                  acc && level
+            case match(left, right) do
+              {level, matches} ->
+                matches
+                |> Enum.flat_map(fn {l, r} -> [{l, r}, {r, l}] end)
+                |> group_matches()
+                |> IO.inspect(label: :well)
+                |> Enum.all?(fn {_, values} -> length(values) == 1 end)
+                |> case do
+                  true ->
+                    acc && level
 
-                false ->
-                  throw :no
-              end
+                  false ->
+                    throw :no
+                end
+
+              :no ->
+                throw :no
             end
           end)
       end)
@@ -307,7 +326,7 @@ defmodule Tria.Interpreter do
 
   defp group_matches(matches) do
     matches
-    |> Enum.filter(& Kernel.match?({_, _}, &1)) #FIXME read todo above
+    |> Enum.filter(& match?({_, _}, &1)) #FIXME read todo above
     |> Enum.group_by(fn {k, _} -> k end, fn {_, v} -> v end)
     |> Stream.map(fn {key, values} -> {key, Enum.uniq values} end) # Streaming to lazily iterate over it
   end

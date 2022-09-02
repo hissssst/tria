@@ -7,21 +7,21 @@ defmodule Tria.InterpreterTest do
       pattern = quote(do: [1, 2, _])
       data = quote(do: [1, 2, 3])
 
-      assert {:yes, _} = Interpreter.match?(pattern, data)
+      assert {:yes, _} = Interpreter.match(pattern, data)
     end
 
     test "simple maybe" do
       pattern = quote(do: [1, 2, 3])
       data = quote(do: [1, 2, x])
 
-      assert {:maybe, _} = Interpreter.match?(pattern, data)
+      assert {:maybe, _} = Interpreter.match(pattern, data)
     end
 
     test "simple no" do
       pattern = quote(do: [_, _, 3])
       data = quote(do: [1, 2, 4])
 
-      assert :no = Interpreter.match?(pattern, data)
+      assert :no = Interpreter.match(pattern, data)
     end
 
     test "lists" do
@@ -32,17 +32,17 @@ defmodule Tria.InterpreterTest do
       data4 = quote(do: [1, 2 | foo()])
       data5 = quote(do: [1, 2, 2 | foo()])
 
-      assert {:yes, _} = Interpreter.match?(pattern, data1)
-      assert {:yes, _} = Interpreter.match?(pattern, data2)
-      assert :no = Interpreter.match?(pattern, data3)
-      assert {:maybe, _} = Interpreter.match?(pattern, data4)
-      assert :no = Interpreter.match?(pattern, data5)
+      assert {:yes, _} = Interpreter.match(pattern, data1)
+      assert {:yes, _} = Interpreter.match(pattern, data2)
+      assert :no = Interpreter.match(pattern, data3)
+      assert {:maybe, _} = Interpreter.match(pattern, data4)
+      assert :no = Interpreter.match(pattern, data5)
     end
 
     test "lists 2" do
       pattern = quote do: [x | _]
       data = quote do: [1]
-      assert {:yes, [{{:x, _, _}, 1} | _]} = Interpreter.match?(pattern, data)
+      assert {:yes, [{{:x, _, _}, 1} | _]} = Interpreter.match(pattern, data)
     end
 
     test "tuples" do
@@ -55,13 +55,13 @@ defmodule Tria.InterpreterTest do
       data6 = quote(do: {3, []})
       data7 = quote(do: {foo(), 2})
 
-      assert {:yes, _} = Interpreter.match?(pattern1, data1)
-      assert :no = Interpreter.match?(pattern1, data2)
-      assert :no = Interpreter.match?(pattern1, data3)
-      assert {:yes, _} = Interpreter.match?(pattern1, data4)
-      assert {:maybe, _} = Interpreter.match?(pattern1, data5)
-      assert :no = Interpreter.match?(pattern1, data6)
-      assert {:yes, _} = Interpreter.match?(pattern1, data7)
+      assert {:yes, _} = Interpreter.match(pattern1, data1)
+      assert :no = Interpreter.match(pattern1, data2)
+      assert :no = Interpreter.match(pattern1, data3)
+      assert {:yes, _} = Interpreter.match(pattern1, data4)
+      assert {:maybe, _} = Interpreter.match(pattern1, data5)
+      assert :no = Interpreter.match(pattern1, data6)
+      assert {:yes, _} = Interpreter.match(pattern1, data7)
 
       pattern2 = quote(do: {1, _, 2})
       data1 = quote(do: {1, 1, 2})
@@ -71,26 +71,26 @@ defmodule Tria.InterpreterTest do
       data5 = quote(do: {1, 3, foo()})
       data6 = quote(do: {1, 3, []})
 
-      assert {:yes, _} = Interpreter.match?(pattern2, data1)
-      assert :no = Interpreter.match?(pattern2, data2)
-      assert :no = Interpreter.match?(pattern2, data3)
-      assert {:yes, _} = Interpreter.match?(pattern2, data4)
-      assert {:maybe, _} = Interpreter.match?(pattern2, data5)
-      assert :no = Interpreter.match?(pattern2, data6)
+      assert {:yes, _} = Interpreter.match(pattern2, data1)
+      assert :no = Interpreter.match(pattern2, data2)
+      assert :no = Interpreter.match(pattern2, data3)
+      assert {:yes, _} = Interpreter.match(pattern2, data4)
+      assert {:maybe, _} = Interpreter.match(pattern2, data5)
+      assert :no = Interpreter.match(pattern2, data6)
     end
 
     test "function" do
       pattern = quote(do: [1, _, {1, 2, _}])
       data = quote(do: [1, _, func()])
 
-      assert {:maybe, _} = Interpreter.match?(pattern, data)
+      assert {:maybe, _} = Interpreter.match(pattern, data)
     end
 
     test "deep structure 1" do
       pattern = quote(do: [1, 2, _, 4 | _])
       data = quote(do: [1, 2, %{x: 1, y: 2}, 4, 5, 6])
 
-      assert {:yes, _} = Interpreter.match?(pattern, data)
+      assert {:yes, _} = Interpreter.match(pattern, data)
     end
 
     test "simple matching clauses" do
@@ -122,7 +122,7 @@ defmodule Tria.InterpreterTest do
       arg = {1, 2}
       pattern = quote(do: t when is_tuple(t) and tuple_size(t) > 0)
 
-      assert {:yes, _} = Interpreter.match?(pattern, arg)
+      assert {:yes, _} = Interpreter.match(pattern, arg)
     end
 
     test "map literals" do
@@ -130,8 +130,8 @@ defmodule Tria.InterpreterTest do
       data1 = quote do: %{x: 1}
       data2 = quote do: %{x: 1, y: 2}
 
-      assert {:yes, _} = Interpreter.match?(pattern, data1)
-      assert {:yes, _} = Interpreter.match?(pattern, data2)
+      assert {:yes, _} = Interpreter.match(pattern, data1)
+      assert {:yes, _} = Interpreter.match(pattern, data2)
     end
 
     test "map variables" do
@@ -139,20 +139,20 @@ defmodule Tria.InterpreterTest do
       data1 = quote do: %{x: 1}
       data2 = quote do: %{x: 1, y: 2}
 
-      assert {:yes, _} = Interpreter.match?(pattern, data1)
-      assert {:yes, _} = Interpreter.match?(pattern, data2)
+      assert {:yes, _} = Interpreter.match(pattern, data1)
+      assert {:yes, _} = Interpreter.match(pattern, data2)
     end
 
     test "difficult intersections" do
       pattern = quote do: {same, same}
       data = quote do: {%{x: x, z: 1}, %{x: 2, z: x}}
 
-      assert :no = Interpreter.match?(pattern, data)
+      assert :no = Interpreter.match(pattern, data)
 
       pattern = quote do: {same, same}
       data = quote do: {%{x: {x, x}, z: foo()}, %{x: foo(), z: {x, x, x}}}
 
-      assert :no = Interpreter.match?(pattern, data)
+      assert :no = Interpreter.match(pattern, data)
     end
   end
 end

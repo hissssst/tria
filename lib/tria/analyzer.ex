@@ -41,13 +41,13 @@ defmodule Tria.Analyzer do
   end
 
   def fetch_tria(mfa) do
-    {module, _, _} = arityfy mfa
+    {module, _name, _arity} = arityfy mfa
     case FunctionRepo.lookup(mfa, :tria) do
       nil ->
         case fetch_abstract(mfa) do
           nil ->
             nil
-
+           
           abstract ->
             {:ok, tria, _} = AbstractTranslator.to_tria(abstract, %Macro.Env{__ENV__ | module: module})
             tria = {:fn, [], tria}

@@ -11,9 +11,12 @@ defmodule Tria.Pass.Evaluation do
   import Tria.Common
   import Tria.Tri
   alias Tria.Interpreter
+  alias Tria.Analyzer.Purity
 
   defstruct [
     bindings: %{},
+    disabled_prefixes: [],
+    enabled_prefixes: nil,
     context: :regular
   ]
 
@@ -32,25 +35,34 @@ defmodule Tria.Pass.Evaluation do
 
   # Block
   defp do_run({:__block__, meta, block}, configuration) do
-    {reversed_lines, new_configuration} =
-      Enum.reduce(block, {[], configuration}, fn line, {lines, configuration} ->
-        {line, new_configuration} = do_run(line, configuration)
-        {[line | lines], new_configuration}
+    {lines, new_configuration} =
+      Enum.flat_map_reduce(block, configuration, fn line, configuration ->
+        {line, configuration} = do_run(line, configuration)
+        lines = List.wrap with {:__block__, _, block} <- line, do: block
+        {lines, configuration}
       end)
 
     block =
       configuration
-      |> drop_literals_in_block(Enum.reverse reversed_lines)
+      |> drop_literals_in_block(lines)
       |> case do
         [] -> raise "Somebody fucked up"
         [line] -> line
         lines -> {:__block__, meta, lines}
       end
 
-    {
-      block,
-      new_configuration
-    }
+    {block, new_configuration}
+  end
+
+  # Try
+  defp do_run({:try, _, [[{:do, body} | clauses]]}, configuration) do
+    {body, _body_configuration} = do_run(body, configuration)
+    if Macro.quoted_literal?(body) do
+      {body, configuration}
+    else
+      {clauses, _clauses_conf} = do_run(clauses, configuration)
+      {{:try, [], [[{:do, body} | clauses]]}, configuration}
+    end
   end
 
   # Equals
@@ -58,7 +70,7 @@ defmodule Tria.Pass.Evaluation do
     {left, left_configuration} = propagate_to_pattern(left, configuration)
     {right, right_configuration} = do_run(right, configuration)
 
-    case Interpreter.match?(left, right) do
+    case Interpreter.match(left, right) do
       {:yes, bindings} ->
         {configuration, binds} =
           Enum.reduce(bindings, {configuration <~ left_configuration, []}, fn
@@ -68,18 +80,27 @@ defmodule Tria.Pass.Evaluation do
                   {put_bind(configuration, variable, value), binds}
 
                 is_fn(value) ->
+                  IO.inspect left, label: :left_here
                   {put_bind(configuration, variable, value), [bind_to_equal(bind) | binds]}
 
                 true ->
                   {configuration, [bind_to_equal(bind) | binds]}
               end
           end)
+          # |> IO.inspect(label: :here)
 
         body =
-          quote do
-            unquote_splicing(binds)
-            unquote(right)
+          case binds do
+            [] ->
+              right
+
+            binds ->
+              quote do
+                unquote_splicing(binds)
+                unquote(right)
+              end
           end
+
         {body, configuration}
 
       :no ->
@@ -95,23 +116,23 @@ defmodule Tria.Pass.Evaluation do
         }
     end
 
-    if Macro.quoted_literal?(right) do
-      {:yes, bindings} = Interpreter.match?(left, right)
-      bindings =
-        Map.new(bindings, fn {{name, _, context} = v, value} when is_variable(v) ->
-          {{name, context}, value}
-        end)
+    # if Macro.quoted_literal?(right) do
+    #   {:yes, bindings} = Interpreter.match(left, right)
+    #   bindings =
+    #     Map.new(bindings, fn {{name, _, context} = v, value} when is_variable(v) ->
+    #       {{name, context}, value}
+    #     end)
 
-      {
-        right,
-        configuration <~ left_configuration <~ %__MODULE__{bindings: bindings}
-      }
-    else
-      {
-        quote(do: unquote(left) = unquote(right)),
-        configuration <~ right_configuration <~ left_configuration
-      }
-    end
+    #   {
+    #     right,
+    #     configuration <~ left_configuration <~ %__MODULE__{bindings: bindings}
+    #   }
+    # else
+    #   {
+    #     quote(do: unquote(left) = unquote(right)),
+    #     configuration <~ right_configuration <~ left_configuration
+    #   }
+    # end
   end
 
   # Case
@@ -123,7 +144,7 @@ defmodule Tria.Pass.Evaluation do
     code =
       clauses
       |> Enum.map(fn {:"->", _, [[left], right]} ->
-        {Interpreter.match?(left, arg), left, right}
+        {Interpreter.match(left, arg), left, right}
       end)
       |> filter_clauses()
       # |> IO.inspect(label: :after_filter)
@@ -166,7 +187,7 @@ defmodule Tria.Pass.Evaluation do
 
     code =
       clauses
-      |> Enum.map(fn {:"->", _, [left, right]} -> {Interpreter.multimatch?(left, args), left, right} end)
+      |> Enum.map(fn {:"->", _, [left, right]} -> {Interpreter.multimatch(left, args), left, right} end)
       |> filter_clauses()
       |> case do
         [{{:yes, bindings}, _pattern, body}] ->
@@ -348,7 +369,7 @@ defmodule Tria.Pass.Evaluation do
   defp do_run(dot_call(module, func, args), configuration) do
     {args, args_configuration} = do_run(args, configuration)
     call = dot_call(module, func, args)
-    if Enum.all?(args, &Macro.quoted_literal?/1) and is_pure(configuration, call) do
+    if Enum.all?(args, &Macro.quoted_literal?/1) and inlinable?(configuration, call) do
       ast =
         case Interpreter.eval(call) do
           {:ok, {result, []}} ->
@@ -377,7 +398,7 @@ defmodule Tria.Pass.Evaluation do
   defp do_run({func, meta, args}, configuration) when is_list(args) do
     {args, args_configuration} = do_run(args, configuration)
     call = {func, meta, args}
-    if Enum.all?(args, &Macro.quoted_literal?/1) and is_pure(configuration, call) do
+    if Enum.all?(args, &Macro.quoted_literal?/1) and inlinable?(configuration, call) do
       {Interpreter.eval!(call), args_configuration}
     else
       {call, args_configuration}
@@ -486,8 +507,13 @@ defmodule Tria.Pass.Evaluation do
     %{left | bindings: Map.merge(left_bindings, right_bindings)}
   end
 
-  defp fetch_bind(%{bindings: bindings}, {name, _, context}) do
-    Map.fetch(bindings, {name, context})
+  defp fetch_bind(%{bindings: bindings} = cfg, {name, _, context}) do
+    with(
+      {:ok, var} when is_variable(var) <- Map.fetch(bindings, {name, context}),
+      :error <- fetch_bind(cfg, var)
+    ) do
+      {:ok, var}
+    end
   end
 
   defp put_bind(cfg, {name, _, _}, {bind_to_name, _, _}) when :_ in [name, bind_to_name], do: cfg
@@ -495,24 +521,18 @@ defmodule Tria.Pass.Evaluation do
     %{cfg | bindings: Map.put(bindings, {name, context}, value)}
   end
 
-  defp is_pure(_configuration, dot_call(module, _, args) = dc) when is_atom(module) do
-    # alias Tria.Analyzer
-    alias Tria.Analyzer.Purity
-
-    with true <- Enum.all?(args, &Macro.quoted_literal?/1) do
-      # tria = Analyzer.fetch_tria({module, func, args})
-      with false <- Purity.check_analyze(dc) do
-        case Purity.run_analyze(dc) do
-          {:pure, _, _} ->
-            true
-
-          _ ->
-            false
-        end
-      end
+  defp inlinable?(_configuration, dot_call(module, _, args) = dc) when is_atom(module) do
+    # prefix = List.first Module.split module
+    with(
+      # false <- prefix in configuration.disabled_prefixes,
+      # true <- !configuration.enabled_prefixes && prefix in configuration.enabled_prefixes,
+      true <- Enum.all?(args, &Macro.quoted_literal?/1),
+      false <- Purity.check_analyze(dc)
+    ) do
+      match? {:pure, _, _}, Purity.run_analyze(dc)
     end
   end
-  defp is_pure(_configuration, _ast), do: false
+  defp inlinable?(_configuration, _ast), do: false
 
   defp unify({varname, meta, _cotnext}) do
     {varname, meta, gen_uniq_context()}
@@ -523,7 +543,7 @@ defmodule Tria.Pass.Evaluation do
   defp drop_literals_in_block(_configuration, []), do: []
   defp drop_literals_in_block(_configuration, [last]), do: [last]
   defp drop_literals_in_block(configuration, [first, second | tail]) do
-    if Macro.quoted_literal?(first) or is_pure(configuration, first) do
+    if is_fn(first) or Macro.quoted_literal?(first) or Purity.check_analyze(first) do
       drop_literals_in_block(configuration, [second | tail])
     else
       [first | drop_literals_in_block(configuration, [second | tail])]
@@ -537,10 +557,6 @@ defmodule Tria.Pass.Evaluation do
 
   defp bind_to_equal({left, right}) do
     quote do: unquote(left) = unquote(right)
-  end
-
-  defp binds_to_block(binds) do
-    {:__block__, [], Enum.map(binds, &bind_to_equal/1)}
   end
 
 end

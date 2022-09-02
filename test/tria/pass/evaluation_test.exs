@@ -139,9 +139,8 @@ defmodule Tria.Pass.EvaluationTest do
         |> Evaluation.run_once!()
 
       assert(tri do
-        head = something
         case x do
-          1 when head > 10 -> :ok
+          1 when something > 10 -> :ok
         end
       end = evaluated)
     end
@@ -246,11 +245,7 @@ defmodule Tria.Pass.EvaluationTest do
         |> Evaluation.run_once!()
 
       assert(tri do
-        try do
-          {:ok, {2}}
-        catch
-          :path_not_found -> :error
-        end
+        {:ok, {2}}
       end = evaluated)
     end
 
@@ -324,6 +319,93 @@ defmodule Tria.Pass.EvaluationTest do
         |> Evaluation.run_once!()
 
       assert tri(Kernel.throw(:path_not_found)) = evaluated
+    end
+
+    test "fn in variable" do
+      evaluated =
+        tri do
+          func = fn x -> x + 1 end
+          func.(func.(10))
+        end
+        |> Evaluation.run_once!()
+        |> Evaluation.run_once!()
+        |> Evaluation.run_once!()
+
+      assert 12 = evaluated
+    end
+
+    test "Pathex-style fn in fn" do
+      evaluated =
+        tri do
+          variable_0 = fn
+           :update, {x, function} ->
+             case x do
+               %{"x" => x} = x_1410 ->
+                 with {:ok, y} <- function.(x) do
+                   {:ok, %{x_1410 | "x" => y}}
+                 else
+                   []
+                 end
+
+               _ ->
+                 :error
+             end
+
+           :view, {x, function} ->
+             case x do
+               %{"x" => x} -> function.(x)
+               _ -> :error
+             end
+           end
+
+           variable_1 = fn
+             :update, {x, function} ->
+               case x do
+                 %{"x" => x} = x_1474 ->
+                   with {:ok, y} <- function.(x) do
+                     {:ok, %{x_1474 | "x" => y}}
+                   else
+                     []
+                   end
+
+                 _ ->
+                   :error
+               end
+
+             :view, {x, function} ->
+               case x do
+                 %{"x" => x} -> function.(x)
+                 _ -> :error
+               end
+           end
+
+           fn
+             :view, {x, func} ->
+               variable_0.(:view, {x, fn x -> variable_1.(:view, {x, func}) end})
+
+             :update, {x, func} ->
+               variable_0.(:update, {x, fn x -> variable_1.(:update, {x, func}) end})
+           end
+        end
+        |> Evaluation.run_once!()
+        |> Evaluation.run_once!()
+        |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        |> inspect_ast(label: :here)
     end
   end
 
