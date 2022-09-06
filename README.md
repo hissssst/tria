@@ -20,7 +20,21 @@ Tria anguage differs from Elixir:
 
 ### TODO
 
+[ ] PGO for inlining. We can always inline functions which are called once
+
+[ ] Implement `Bindings` as a structure, this will deduplicate
+    a ton of code
+
+[ ] Implement `fold` function to fold bindings into ast
+
+[ ] Think about handling `when` inside patterns in a different way
+    I already know 5 places where it takes place
+
 [ ] Infrastructure to enable inter-module inlinings
+    Actually inlinings are already possible
+    We just need to define how, where and in what amount to inline
+
+    And this is a very hard task!
 
 [x] Generate one module from multiple modules
 

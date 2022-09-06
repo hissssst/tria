@@ -9,9 +9,17 @@ defmodule Tria do
 
   # Public interface
 
+  @doc """
+  This macro applies optimizer to the passed body.
+  Use it with caution, because it can fuck up the context
+  """
   defmacro tria(do: body), do: run(body, __CALLER__)
   defmacro tria(body), do: run(body, __CALLER__)
 
+  @doc """
+  This same as `tria/1` macro, but as a function
+  """
+  @spec run(Macro.t(), Macro.Env.t()) :: Macro.t()
   def run(quoted, env) do
     quoted
     |> Tria.Translator.Elixir.to_tria!(env)
@@ -153,25 +161,34 @@ defmodule Tria do
   end
   defp join_clauses([]), do: []
 
-  defp run_while(ast, prev \\ nil)
-  defp run_while(ast, ast), do: ast
-  defp run_while(ast, prev) do
-    if Tria.Comparator.compare(ast, prev) do
-      ast
-    else
-      # inspect_ast(ast)
-      # inspect_ast(prev)
-      # Process.sleep(1000)
+  defp run_while(ast) do
+    case Tria.Pass.Evaluation.run_once(ast, hooks: %{after: &Tria.Pass.Peephole.after_hook/2}) do
+      {:ok, ast} ->
+        run_while(ast)
 
-      if Macro.to_string(ast) == Macro.to_string(prev) do
-        require IEx
-        IEx.pry()
-      end
-
-      ast
-      |> Tria.Pass.Evaluation.run_once!()
-      |> run_while(ast)
+      {:error, :nothing_to_evaluate} ->
+        ast
     end
   end
+  # defp run_while(ast, prev \\ nil)
+  # defp run_while(ast, ast), do: ast
+  # defp run_while(ast, prev) do
+  #   if Tria.Comparator.compare(ast, prev) do
+  #     ast
+  #   else
+  #     # inspect_ast(ast)
+  #     # inspect_ast(prev)
+  #     # Process.sleep(1000)
+
+  #     if Macro.to_string(ast) == Macro.to_string(prev) do
+  #       require IEx
+  #       IEx.pry()
+  #     end
+
+  #     ast
+  #     |> Tria.Pass.Evaluation.run_once!()
+  #     |> run_while(ast)
+  #   end
+  # end
 
 end

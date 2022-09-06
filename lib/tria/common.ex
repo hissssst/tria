@@ -77,11 +77,11 @@ defmodule Tria.Common do
                   is_list(element(t, 1)) and
                   is_list(element(t, 2))
 
+
   @doc """
   Checks if passed AST is a literal (this means a value which represents itself in the AST)
   """
-  defguard is_literal(l) when is_atom(l) or is_number(l) or is_pid(l) or is_reference(l) or
-    is_port(l)
+  defguard is_literal(l) when is_atom(l) or is_number(l) or is_binary(l)
 
   @doc """
   Checks if passed AST is a `fn` closure

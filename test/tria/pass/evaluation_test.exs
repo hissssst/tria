@@ -137,6 +137,7 @@ defmodule Tria.Pass.EvaluationTest do
           end
         end
         |> Evaluation.run_once!()
+        |> inspect_ast(label: :what)
 
       assert(tri do
         case x do
@@ -331,7 +332,7 @@ defmodule Tria.Pass.EvaluationTest do
         |> Evaluation.run_once!()
         |> Evaluation.run_once!()
 
-      assert 12 = evaluated
+      assert {:__block__, _, [_, 12]} = evaluated
     end
 
     test "Pathex-style fn in fn" do
@@ -406,6 +407,178 @@ defmodule Tria.Pass.EvaluationTest do
         # |> Evaluation.run_once!()
         # |> Evaluation.run_once!()
         |> inspect_ast(label: :here)
+    end
+
+    test "Pathex-style concatenation" do
+      evaluated =
+        tri do
+          variable_0 = fn
+           :delete, {x, function} ->
+             try do
+               {:ok,
+                case x do
+                  %{"x" => value} = map ->
+                    case function.(value) do
+                      {:ok, new_value} -> %{map | "x" => new_value}
+                      :delete_me -> Map.delete(map, "x")
+                      :error -> Kernel.throw(:path_not_found)
+                    end
+
+                  _ ->
+                    Kernel.throw(:path_not_found)
+                end}
+             catch
+               :path_not_found -> :error
+             end
+
+           :force_update, {x, function, default} ->
+             try do
+               {:ok,
+                case x do
+                  %{"x" => value} = map ->
+                    %{
+                      map
+                      | "x" =>
+                          case function.(value) do
+                            {:ok, value} -> value
+                            :error -> Kernel.throw(:path_not_found)
+                          end
+                    }
+
+                  %{} = other ->
+                    Map.put(other, "x", default)
+
+                  _ ->
+                    Kernel.throw(:path_not_found)
+                end}
+             catch
+               :path_not_found -> :error
+             end
+
+           :inspect, _ ->
+             {:path, [], ["x"]}
+
+           :update, {x, function} ->
+             case x do
+               %{"x" => x} = x_8418 ->
+                 with {:ok, y} <- function.(x) do
+                   {:ok, %{x_8418 | "x" => y}}
+                 else
+                   []
+                 end
+
+               _ ->
+                 :error
+             end
+
+           :view, {x, function} ->
+             case x do
+               %{"x" => x} -> function.(x)
+               _ -> :error
+             end
+          end
+
+          variable_1 = fn
+           :delete, {x, function} ->
+             try do
+               {:ok,
+                case x do
+                  %{"x" => value} = map ->
+                    case function.(value) do
+                      {:ok, new_value} -> %{map | "x" => new_value}
+                      :delete_me -> Map.delete(map, "x")
+                      :error -> Kernel.throw(:path_not_found)
+                    end
+
+                  _ ->
+                    Kernel.throw(:path_not_found)
+                end}
+             catch
+               :path_not_found -> :error
+             end
+
+           :force_update, {x, function, default} ->
+             try do
+               {:ok,
+                case x do
+                  %{"x" => value} = map ->
+                    %{
+                      map
+                      | "x" =>
+                          case function.(value) do
+                            {:ok, value} -> value
+                            :error -> Kernel.throw(:path_not_found)
+                          end
+                    }
+
+                  %{} = other ->
+                    Map.put(other, "x", default)
+
+                  _ ->
+                    Kernel.throw(:path_not_found)
+                end}
+             catch
+               :path_not_found -> :error
+             end
+
+           :inspect, _ ->
+             {:path, [], ["x"]}
+
+           :update, {x, function} ->
+             case x do
+               %{"x" => x} = x_8482 ->
+                 with {:ok, y} <- function.(x) do
+                   {:ok, %{x_8482 | "x" => y}}
+                 else
+                   []
+                 end
+
+               _ ->
+                 :error
+             end
+
+           :view, {x, function} ->
+             case x do
+               %{"x" => x} -> function.(x)
+               _ -> :error
+             end
+          end
+
+          fn
+           :view, {x, func} ->
+             variable_0.(:view, {x, fn x -> variable_1.(:view, {x, func}) end})
+
+           :update, {x, func} ->
+             variable_0.(:update, {x, fn x -> variable_1.(:update, {x, func}) end})
+
+           :delete, {x, func} ->
+             variable_0.(:delete, {x, fn x -> variable_1.(:delete, {x, func}) end})
+
+           :inspect, _ ->
+             {:~>, [], [variable_0.(:inspect, []), variable_1.(:inspect, [])]}
+
+           :force_update, {x, func, default} ->
+             with {:ok, default_1} <-
+                    (with :error <- variable_1.(:force_update, {%{}, func, default}),
+                          :error <- variable_1.(:force_update, {[], func, default}) do
+                       variable_1.(:force_update, {{}, func, default})
+                     else
+                       []
+                     end) do
+               variable_0.(
+                 :force_update,
+                 {x, fn x -> variable_1.(:force_update, {x, func, default}) end, default_1}
+               )
+             else
+               []
+             end
+          end
+        end
+        |> Tria.run(__ENV__)
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        # |> Evaluation.run_once!()
+        |> inspect_ast(label: :ast)
     end
   end
 

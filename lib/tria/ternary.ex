@@ -3,6 +3,8 @@ defmodule Tria.Ternary do
   Ternary logic module with helpers and operations
   """
 
+  @type t :: :yes | :maybe | :no
+
   defmacro __using__(_opts) do
     imports =
       __CALLER__.functions

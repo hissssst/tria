@@ -38,6 +38,18 @@ defmodule Tria.Interpreter do
   @typedoc "Type of binding"
   @type binding() :: variable_binding() | pin_binding() | map_binding()
 
+  @type eval_result :: {:ok, {Macro.t(), [Code.binding()]}}
+  | {:error, Exception.t()}
+  | {:exit, any()}
+  | {:thrown, any()}
+
+  @spec eval!(Macro.t(), [binding()], timeout()) :: Macro.t()
+  def eval!(quoted, bindings \\ [], timeout \\ 5000) do
+    {:ok, {result, _bindings}} = eval(quoted, bindings, timeout)
+    result
+  end
+
+  @spec eval(Macro.t(), [binding()], timeout()) :: eval_result()
   def eval(quoted, bindings \\ [], timeout \\ 5000) do
     # It's neccessary to run this function in a cleanest enviroment possible
     # So no Task or anything like this, plain `spawn`
@@ -59,9 +71,27 @@ defmodule Tria.Interpreter do
     end
   end
 
+  @spec eval_local(Macro.t(), [binding()]) :: eval_result()
   def eval_local(quoted, bindings \\ []) do
+    # We manually attach bindings before the code
+    # This is just more efficient and easy to understand
+    bindings =
+      Enum.map(bindings, fn
+        {:map_match, left, right} ->
+          quote do: %{unquote_splicing left} = %{unquote_splicing right}
+
+        {left, right} ->
+          quote do: unquote(left) = unquote(right)
+      end)
+
+    quoted =
+      quote do
+        unquote_splicing(bindings)
+        unquote(quoted)
+      end
+
     try do
-      {:ok, Code.eval_quoted(quoted, bindings)}
+      {:ok, Code.eval_quoted(quoted, [])}
     rescue
       error -> {:error, error}
     catch
@@ -70,16 +100,12 @@ defmodule Tria.Interpreter do
     end
   end
 
-  def eval!(quoted, bindings \\ [], timeout \\ 5000) do
-    {:ok, {result, _bindings}} = eval(quoted, bindings, timeout)
-    result
-  end
-
   # Multimatch
 
   @doc """
   Same as `match` but for multiple arguments, like in `fn` calls
   """
+  def multimatch([left], [right]), do: match(left, right)
   def multimatch([{:when, _, [lefts]}], right) do
     {guard, left} = List.pop_at(lefts, -1)
     left = quote do: {unquote_splicing(left)} when unquote(guard)
@@ -331,37 +357,4 @@ defmodule Tria.Interpreter do
     |> Stream.map(fn {key, values} -> {key, Enum.uniq values} end) # Streaming to lazily iterate over it
   end
 
-  # Here I use counters, but all of this will be dropped later
-  defp mutual_translate({left, right}) do
-    {left, translations} =
-      Macro.prewalk(left, %{}, fn
-        {_, _, args} = ast, translations when is_list(args) ->
-          if is_special_form(ast) do
-            {ast, translations}
-          else
-            var = {:var, [counter: :erlang.unique_integer()], nil}
-            {var, Map.put(translations, ast, var)}
-          end
-
-        other, translations ->
-          {other, translations}
-      end)
-
-    right =
-      Macro.prewalk(right, fn
-        {_, _, args} = ast when is_list(args) ->
-          if is_special_form(ast) do
-            ast
-          else
-            Map.get_lazy(translations, ast, fn ->
-              {:var, [counter: :erlang.unique_integer()], nil}
-            end)
-          end
-
-        other ->
-          other
-      end)
-
-    {left, right}
-  end
 end
