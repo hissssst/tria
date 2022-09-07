@@ -357,4 +357,48 @@ defmodule Tria.Interpreter do
     |> Stream.map(fn {key, values} -> {key, Enum.uniq values} end) # Streaming to lazily iterate over it
   end
 
+  def mutual_match(left, right) do
+    {left, right} = mutual_translate(left, right)
+    with(
+      {level1, _} <- match(left, right),
+      {level2, _} <- match(right, left)
+    ) do
+      level1 && level2
+    end
+  end
+
+  # Here I use counters, but all of this will be dropped later
+  defp mutual_translate(left, right) do
+    {left, translations} =
+      Macro.prewalk(left, %{}, fn
+        {_, _, args} = ast, translations when is_list(args) ->
+          if is_special_form(ast) do
+            {ast, translations}
+          else
+            var = {:var, [counter: :erlang.unique_integer()], nil}
+            {var, Map.put(translations, ast, var)}
+          end
+
+        other, translations ->
+          {other, translations}
+      end)
+
+    right =
+      Macro.prewalk(right, fn
+        {_, _, args} = ast when is_list(args) ->
+          if is_special_form(ast) do
+            ast
+          else
+            Map.get_lazy(translations, ast, fn ->
+              {:var, [counter: :erlang.unique_integer()], nil}
+            end)
+          end
+
+        other ->
+          other
+      end)
+
+    {left, right}
+  end
+
 end
