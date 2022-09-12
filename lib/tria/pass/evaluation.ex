@@ -120,63 +120,11 @@ defmodule Tria.Pass.Evaluation do
 
       # Equals
       tri(left = right) ->
-        {left, left_evaluation_context} = propagate_to_pattern(left, evaluation_context)
-        {right, right_evaluation_context} = do_run(right, evaluation_context)
-
-        case Interpreter.match(left, right) do
-          {:yes, bindings} ->
-            {evaluation_context, binds} =
-              Enum.reduce(bindings, {evaluation_context <~ left_evaluation_context, []}, fn
-                {variable, value} = bind, {evaluation_context, binds} ->
-                  cond do
-                    Macro.quoted_literal?(value) ->
-                      {put_bind(evaluation_context, variable, value), binds}
-
-                    is_variable(value) ->
-                      hit()
-                      {put_bind(evaluation_context, variable, value), binds}
-
-                    is_fn(value) ->
-                      {put_bind(evaluation_context, variable, value), [bind_to_equal(bind) | binds]}
-
-                    true ->
-                      hit()
-                      {evaluation_context, [bind_to_equal(bind) | binds]}
-                  end
-              end)
-
-            body =
-              case binds do
-                # No binds, hmmm.
-                [] ->
-                  right
-
-                # This is just a `variable = something()` case
-                [bind] ->
-                    bind
-
-                binds ->
-                  quote do
-                    unquote_splicing(binds)
-                    unquote(right)
-                  end
-              end
-
-            {body, evaluation_context}
-
-          :no ->
-            hit()
-            IO.warn "This bind will never match"
-            body = quote do: raise "Will never match"
-            {body, evaluation_context <~ right_evaluation_context <~ left_evaluation_context}
-
-          {:maybe, _} ->
-            #TODO relax matching
-            {
-              quote(do: unquote(left) = unquote(right)),
-              evaluation_context <~ right_evaluation_context <~ left_evaluation_context
-            }
+        {hit?, body, env} = run_equals(left, right, evaluation_context)
+        if hit? do
+          hit()
         end
+        {body, env}
 
       # Case
       tri(case(arg, do: clauses)) ->
@@ -355,6 +303,75 @@ defmodule Tria.Pass.Evaluation do
     |> run_hook(:after)
   end
 
+  @spec run_equals(term, term, term) :: {boolean, Macro.t(), term}
+  def run_equals(left, right, env) do
+    {left, lenv} = propagate_to_pattern(left, env)
+    {right, renv} = do_run(right, env)
+
+    case Interpreter.match(left, right) do
+      :no ->
+        IO.warn "This bind will never match"
+        body = quote do: raise "Will never match"
+        {
+          true,
+          body,
+          env <~ renv <~ lenv
+        }
+
+      {:maybe, _} ->
+        #TODO relax matching
+        {
+          false,
+          quote(do: unquote(left) = unquote(right)),
+          env <~ renv <~ lenv
+        }
+
+      {:yes, bindings} ->
+        {hit?, new_env, binds} = from_interpreter_binds(env <~ lenv, bindings)
+
+        body =
+          case binds do
+            # No binds, hmmm.
+            [] ->
+              right
+
+            # This is just a `variable = something()` case
+            [bind] ->
+              bind
+
+            binds ->
+              quote do
+                unquote_splicing(binds)
+                unquote(right)
+              end
+          end
+
+        {hit?, body, new_env}
+    end
+  end
+
+  @spec from_interpreter_binds(term, [Interpreter.binding()]) :: {boolean, term, list}
+  defp from_interpreter_binds(env, binds) do
+    Enum.reduce(binds, {false, env, []}, &from_interpreter_bind/2)
+  end
+
+  @spec from_interpreter_bind(Interpreter.binding(), {boolean, term, list}) :: {boolean, term, list}
+  defp from_interpreter_bind({var, val} = bind, {hit?, env, binds}) do
+    cond do
+      Macro.quoted_literal?(val) ->
+        {hit?, put_bind(env, var, val), binds}
+
+      is_variable(val) ->
+        {true, put_bind(env, var, val), binds}
+
+      is_fun(val) ->
+        {hit?, put_bind(env, var, val), [bind_to_equal(bind) | binds]}
+
+      true ->
+        {true, env, [bind_to_equal(bind) | binds]}
+    end
+  end
+
   # Propagating to pattern
 
   defp propagate_to_pattern(code, evaluation_context, new_evaluation_context \\ %__MODULE__{}) do
@@ -418,7 +435,7 @@ defmodule Tria.Pass.Evaluation do
         {right, new_evaluation_context} = propagate_to_pattern(right, evaluation_context, new_evaluation_context)
 
         {{left, right}, new_evaluation_context}
-  
+
       # Literal
       literal when is_literal(literal) ->
         {literal, new_evaluation_context}
