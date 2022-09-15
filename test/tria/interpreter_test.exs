@@ -93,30 +93,31 @@ defmodule Tria.InterpreterTest do
       assert {:yes, _} = Interpreter.match(pattern, data)
     end
 
-    test "simple matching clauses" do
-      clauses = [
-        quote(do: {1, 2}),
-        quote(do: {1, 3}),
-        quote(do: {1, 4}),
-        quote(do: {1, 5}),
-        quote(do: {2, 2}),
-        quote(do: {_, _})
-      ]
+    ### Commented out, because `matching_clause` function is ignored
+    # test "simple matching clauses" do
+    #   clauses = [
+    #     quote(do: {1, 2}),
+    #     quote(do: {1, 3}),
+    #     quote(do: {1, 4}),
+    #     quote(do: {1, 5}),
+    #     quote(do: {2, 2}),
+    #     quote(do: {_, _})
+    #   ]
 
-      assert {:ok, {2, 2}} = Interpreter.matching_clause({2, 2}, clauses)
-    end
+    #   assert {:ok, {2, 2}} = Interpreter.matching_clause({2, 2}, clauses)
+    # end
 
-    test "simple multimatching clauses" do
-      clauses = [
-        [:view, quote(do: {_, _})],
-        [:update, quote(do: {_, _})],
-        [:force_update, quote(do: {_, _, _})]
-      ]
+    # test "simple multimatching clauses" do
+    #   clauses = [
+    #     [:view, quote(do: {_, _})],
+    #     [:update, quote(do: {_, _})],
+    #     [:force_update, quote(do: {_, _, _})]
+    #   ]
 
-      data = [:update, {1, 2}]
+    #   data = [:update, {1, 2}]
 
-      assert {:ok, [:update, _]} = Interpreter.multimatching_clause(data, clauses)
-    end
+    #   assert {:ok, [:update, _]} = Interpreter.multimatching_clause(data, clauses)
+    # end
 
     test "tuple when" do
       arg = {1, 2}
@@ -151,6 +152,18 @@ defmodule Tria.InterpreterTest do
 
       pattern = quote do: {same, same}
       data = quote do: {%{x: {x, x}, z: foo()}, %{x: foo(), z: {x, x, x}}}
+
+      assert :no = Interpreter.match(pattern, data)
+      
+      pattern = quote do: {^x, 2}
+      data = quote do: {1, x}
+
+      assert :no = Interpreter.match(pattern, data)
+    end
+
+    test "difficult map intersection" do
+      pattern = quote do: %{^x => 2}
+      data = quote do: %{1 => x}
 
       assert :no = Interpreter.match(pattern, data)
     end

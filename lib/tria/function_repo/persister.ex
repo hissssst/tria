@@ -15,7 +15,7 @@ defmodule Tria.FunctionRepo.Persister do
 
   # Internal
 
-  defp start(opts \\ []) do
+  defp start(opts) do
     GenServer.start(__MODULE__, opts, name: __MODULE__)
   end
 

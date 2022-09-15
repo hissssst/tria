@@ -4,8 +4,6 @@ defmodule Tria.Interpreter do
   Helpers for partial interpreting of Tria's code
   #TODO: multimatching_clause handle matcheds
   #TODO: match handle whens
-  #TODO: match handle maps
-  #TODO: match handle structures
   #TODO: match handle binaries
   #TODO: match handle fn
   #TODO: matches_conflict? improve
@@ -17,47 +15,30 @@ defmodule Tria.Interpreter do
   import Tria.Common
   import Tria.Tri
 
-  @type variable :: {atom(), list(), atom()}
-  @type pin :: {:"^", list(), [variable()]}
+  alias Tria.Matchlist
+  alias Tria.Translator.Elixir, as: ElixirTranslator
+  import Matchlist, only: [is_map_match: 1, is_empty: 1]
 
-  @typedoc "Is a type of a default left = right binding"
-  @type binding(left, right) :: {left, right}
-
-  @typedoc "Binding where value is set to the variable"
-  @type variable_binding :: binding(variable(), Macro.t())
-
-  @typedoc "Binding which binds some value to the pin"
-  @type pin_binding :: binding(pin(), Macro.t())
-  
-  @typedoc "Pattern binding"
-  @type pattern_binding :: binding(Macro.t(), Macro.t())
-
-  @typedoc "Binding which binds values of the map together"
-  @type map_binding :: {:map_match, [pattern_binding()], [pattern_binding()]}
-
-  @typedoc "Type of binding"
-  @type binding() :: variable_binding() | pin_binding() | map_binding()
-
-  @type eval_result :: {:ok, {Macro.t(), [Code.binding()]}}
+  @type eval_result :: {:ok, {any(), Matchlist.t()}}
   | {:error, Exception.t()}
   | {:exit, any()}
   | {:thrown, any()}
 
-  @spec eval!(Macro.t(), [binding()], timeout()) :: Macro.t()
-  def eval!(quoted, bindings \\ [], timeout \\ 5000) do
-    {:ok, {result, _bindings}} = eval(quoted, bindings, timeout)
+  @spec eval!(Tria.t(), Matchlist.t(), timeout()) :: any()
+  def eval!(quoted, matchlist \\ Matchlist.empty(), timeout \\ 5000) do
+    {:ok, {result, _matchlist}} = eval(quoted, matchlist, timeout)
     result
   end
 
-  @spec eval(Macro.t(), [binding()], timeout()) :: eval_result()
-  def eval(quoted, bindings \\ [], timeout \\ 5000) do
+  @spec eval(Tria.t(), Matchlist.t(), timeout()) :: eval_result()
+  def eval(quoted, matchlist \\ Matchlist.empty(), timeout \\ 5000) do
     # It's neccessary to run this function in a cleanest enviroment possible
     # So no Task or anything like this, plain `spawn`
     ref = make_ref()
     caller = self()
     pid =
       spawn fn ->
-        result = eval_local(quoted, bindings)
+        result = eval_local(quoted, matchlist)
         send(caller, {ref, result})
       end
 
@@ -71,27 +52,20 @@ defmodule Tria.Interpreter do
     end
   end
 
-  @spec eval_local(Macro.t(), [binding()]) :: eval_result()
-  def eval_local(quoted, bindings \\ []) do
-    # We manually attach bindings before the code
+  @spec eval_local(Tria.t(), Matchlist.t()) :: eval_result()
+  def eval_local(quoted, matchlist \\ Matchlist.empty()) do
+    # We manually attach matchlist before the code
     # This is just more efficient and easy to understand
-    bindings =
-      Enum.map(bindings, fn
-        {:map_match, left, right} ->
-          quote do: %{unquote_splicing left} = %{unquote_splicing right}
-
-        {left, right} ->
-          quote do: unquote(left) = unquote(right)
-      end)
-
     quoted =
       quote do
-        unquote_splicing(bindings)
-        unquote(quoted)
+        unquote Matchlist.to_quoted matchlist
+        unquote quoted
       end
+      |> ElixirTranslator.from_tria()
 
     try do
-      {:ok, Code.eval_quoted(quoted, [])}
+      {result, binds} = Code.eval_quoted(quoted, [])
+      {:ok, {result, Enum.map(binds, fn {{name, ctx}, value} -> {{name, [], ctx}, Macro.escape(value)} end)}}
     rescue
       error -> {:error, error}
     catch
@@ -105,6 +79,7 @@ defmodule Tria.Interpreter do
   @doc """
   Same as `match` but for multiple arguments, like in `fn` calls
   """
+  @spec multimatch([Tria.t()], [Tria.t()]) :: {:yes | :maybe, Matchlist.t()} | :no
   def multimatch([left], [right]), do: match(left, right)
   def multimatch([{:when, _, [lefts]}], right) do
     {guard, left} = List.pop_at(lefts, -1)
@@ -123,7 +98,7 @@ defmodule Tria.Interpreter do
   @doc """
   Tries to match ast on pattern and returns the ternary result with bindings
   """
-  @spec match(Tria.t(), Tria.t()) :: {:yes | :maybe, [binding()]} | :no
+  @spec match(Tria.t(), Tria.t()) :: {:yes | :maybe, Matchlist.t()} | :no
 
   # When
   def match({:when, _, [pattern, conditions]}, ast) do
@@ -133,8 +108,10 @@ defmodule Tria.Interpreter do
         if Enum.all?(binds, fn {_, v} -> quoted_literal?(v) end) do
           # Pre-evalute binds, because `match` returns them in quoted form
           eval_binds =
-            Enum.map(binds, fn {{name, _, ctx} = v, value} when is_variable(v) ->
-              {{name, ctx}, eval!(value)}
+            Enum.map(binds, fn {key, value} ->
+              # Here `eval!` is safe, because it is a quoted literal and we
+              # just want to instantiate it
+              {key, eval!(value)}
             end)
 
           case eval(conditions, eval_binds) do
@@ -151,8 +128,8 @@ defmodule Tria.Interpreter do
           {:maybe, binds}
         end
 
-      {:maybe, binds} ->
-        {:maybe, binds}
+      {:maybe, matches} ->
+        {:maybe, matches}
 
       _ ->
         #FIXME
@@ -183,7 +160,7 @@ defmodule Tria.Interpreter do
     merge(match(head_pattern, head_ast), match(tail_pattern, tail_ast))
   end
 
-  def match([], []), do: {:yes, []}
+  def match([], []), do: {:yes, Matchlist.empty()}
 
   # Twople
   def match({left_pattern, right_pattern}, {left_ast, right_ast}) do
@@ -197,23 +174,33 @@ defmodule Tria.Interpreter do
     else
       patterns
       |> Enum.zip(asts)
-      |> Enum.reduce({:yes, []}, fn {pattern, ast}, acc ->
+      |> Enum.reduce({:yes, Matchlist.empty()}, fn {pattern, ast}, acc ->
         merge(acc, match(pattern, ast))
       end)
     end
   end
 
   # Binary
-  def match({:<<>>, _, _patterns}, {:<<>>, _, _asts}) do
-    raise "Binary matching is not implemented"
+  def match({:<<>>, _, _patterns} = left, {:<<>>, _, _asts} = right) do
+    IO.warn "Binary matching is not implemented"
+    {:maybe, Matchlist.new([ {left, right} ])}
   end
 
   # Map
-  def match({:%{}, _, _patterns}, {:%{}, _, [{:"|", _, _kvs}]}) do
-    raise "Maps matching not implemented"
+  def match({:%{}, _, _patterns} = left, {:%{}, _, [{:"|", _, _kvs}]} = right) do
+    #TODO do some checks please
+    {:maybe, Matchlist.new([ {left, right} ])}
   end
 
+  # Single key map is just matching like a tuple
+  def match({:%{}, _, [left]}, {:%{}, _, [right]}) do
+    match(left, right)
+  end
+
+  # Matching maps with multiple keys is just a permutation of tuple matches
+  # But it is just a ton of nasty logic, we need to think of a way to overcome this
   def match({:%{}, _, patterns}, {:%{}, _, asts}) do
+    # When there are more patterns than non patterns, it is hard to get
     if length(patterns) > length(asts), do: throw :no
 
     literal_keys = fn list ->
@@ -226,7 +213,7 @@ defmodule Tria.Interpreter do
     literal_ast = Map.new(literal_ast)
 
     {level_binds, hopes} =
-      Enum.reduce_while(literal_pattern, {{:yes, []}, patterns}, fn {key, pattern}, {acc, hopes} ->
+      Enum.reduce_while(literal_pattern, {{:yes, Matchlist.empty()}, patterns}, fn {key, pattern}, {acc, hopes} ->
         case literal_ast do
           %{^key => value} ->
             {merge(acc, match(pattern, value)), hopes}
@@ -234,7 +221,7 @@ defmodule Tria.Interpreter do
           _ ->
             # In case we don't have a match we can just hope
             # that it is present in non-literal-keys part of AST
-            {merge(acc, {:maybe, []}), [{key, pattern} | hopes]}
+            {merge(acc, {:maybe, Matchlist.empty()}), [{key, pattern} | hopes]}
         end
         |> case do
           {:no, _} = result -> {:halt, result}
@@ -250,7 +237,7 @@ defmodule Tria.Interpreter do
         :no
 
       true ->
-        merge({:maybe, [{:map_match, hopes, asts}]}, level_binds)
+        merge({:maybe, [{ {:"%{}", [], hopes}, {:"%{}", [], asts} }]}, level_binds)
     end
   catch
     :no -> :no
@@ -265,43 +252,48 @@ defmodule Tria.Interpreter do
   end
 
   # Variables
-  def match(tri(^_) = pinned, value), do: {:maybe, [{pinned, value}]}
-  def match({:_, _, _} = var, _) when is_variable(var), do: {:yes, []}
-  def match(var, value) when is_variable(var), do: {:yes, [{var, value}]}
-  def match(pattern, var) when is_variable(var), do: {:maybe, [{pattern, var}]}
+  def match(tri(^_) = pinned, value), do:                   {:maybe, Matchlist.new [ {pinned, value} ]}
+  def match({:_, _, _} = var, _) when is_variable(var), do: {:yes,   Matchlist.empty() }
+  def match(var, value) when is_variable(var), do:          {:yes,   Matchlist.new [ {var, value} ]}
+  def match(pattern, var) when is_variable(var), do:        {:maybe, Matchlist.new [ {pattern, var} ]}
 
-  def match(pattern, {_, _, l} = val) when is_list(l), do: {:maybe, [{pattern, val}]}
+  def match(pattern, {_, _, l} = val) when is_list(l), do:  {:maybe, Matchlist.new [ {pattern, val} ]}
 
   # Literals
-  def match(same, same), do: {:yes, []}
+  def match(same, same), do: {:yes, Matchlist.empty()}
   def match(_, _), do: :no
 
   # Helpers
 
   # Merges two match results together
-  defp merge({left_level, m1}, {right_level, m2}) do
-    merge_matches(left_level && right_level, m1, m2)
+  defp merge({left_level, left_matches}, {right_level, right_matches}) when is_empty(left_matches) or is_empty(right_matches) do
+    {left_level && right_level, Matchlist.merge(left_matches, right_matches)}
+  end
+  defp merge({left_level, left_matches}, {right_level, right_matches}) do
+    join_matchlists(left_level && right_level, left_matches, right_matches)
   end
 
   defp merge(_, _), do: :no
 
-  #TODO This shit is not merging map matches (in fixme below)
-  defp merge_matches(level, left_matches, right_matches) do
+  # Let's read this one
+  defp join_matchlists(level, left_matches, right_matches) do
+    matches = Matchlist.merge(left_matches, right_matches)
     # It is a list of all key to value bindings
-    all_matches =
-      left_matches
-      |> Kernel.++(right_matches)
-      |> Enum.filter(& match?({_, _}, &1))
-      |> Enum.group_by(fn {k, _} -> k end, fn {_, v} -> v end)
-      |> Enum.map(fn {key, values} -> {key, Enum.uniq values} end)
+    {_map_matches, regular_matches} = Enum.split_with(matches, &is_map_match/1)
 
-    map_matches =
-      left_matches
-      |> Kernel.++(right_matches)
-      |> Enum.filter(& match?({:map_match, _, _}, &1))
+    regular_matches =
+      regular_matches
+      |> Enum.flat_map(fn
+        {{:^, _, [variable]}, value} = item when is_variable(variable) ->
+          [item, {value, variable}, {variable, value}]
+
+        {key, value} ->
+          [{key, value}, {value, key}]
+      end)
+      |> group_matches()
 
     level =
-      Enum.reduce(all_matches, level, fn
+      Enum.reduce(regular_matches, level, fn
         # One value for pin or variable
         {_key, [_]}, level ->
           level
@@ -309,18 +301,17 @@ defmodule Tria.Interpreter do
         # Multiple values for pin or variable or pattern
         {_key, values}, level ->
           # In case some patterns are matched agains different values
-          # We'll just check is values match
+          # We'll just check if it is a values match
           #FIXME fix function calls in ast
           values
           |> pairs()
-          |> Enum.map(&mutual_translate/1)
+          |> Enum.map(fn {l, r} -> mutual_translate(l, r) end)
           |> Enum.reduce(level, fn {left, right}, acc ->
             case match(left, right) do
               {level, matches} ->
                 matches
                 |> Enum.flat_map(fn {l, r} -> [{l, r}, {r, l}] end)
                 |> group_matches()
-                |> IO.inspect(label: :well)
                 |> Enum.all?(fn {_, values} -> length(values) == 1 end)
                 |> case do
                   true ->
@@ -336,10 +327,8 @@ defmodule Tria.Interpreter do
           end)
       end)
 
-    matches = for {k, vs} <- all_matches, v <- vs, do: {k, v}
     {level, matches}
-  catch
-    :no -> :no
+    catch :no -> :no
   end
 
   defp pairs([]), do: []
@@ -352,25 +341,14 @@ defmodule Tria.Interpreter do
 
   defp group_matches(matches) do
     matches
-    |> Enum.filter(& match?({_, _}, &1)) #FIXME read todo above
     |> Enum.group_by(fn {k, _} -> k end, fn {_, v} -> v end)
-    |> Stream.map(fn {key, values} -> {key, Enum.uniq values} end) # Streaming to lazily iterate over it
-  end
-
-  def mutual_match(left, right) do
-    {left, right} = mutual_translate(left, right)
-    with(
-      {level1, _} <- match(left, right),
-      {level2, _} <- match(right, left)
-    ) do
-      level1 && level2
-    end
+    |> Enum.map(fn {key, values} -> {key, Enum.uniq values} end)
   end
 
   # Here I use counters, but all of this will be dropped later
   defp mutual_translate(left, right) do
     {left, translations} =
-      Macro.prewalk(left, %{}, fn
+      prewalk(left, %{}, fn
         {_, _, args} = ast, translations when is_list(args) ->
           if is_special_form(ast) do
             {ast, translations}
@@ -384,7 +362,7 @@ defmodule Tria.Interpreter do
       end)
 
     right =
-      Macro.prewalk(right, fn
+      prewalk(right, fn
         {_, _, args} = ast when is_list(args) ->
           if is_special_form(ast) do
             ast

@@ -1,18 +1,23 @@
-defmodule Tria.TranslatorTest do
+defmodule Tria.Translator.ElixirTest do
   use ExUnit.Case, async: true
 
-  import Tria.Tri
+  require Tria.Tri
   alias Tria.Translator.Elixir, as: ElixirTranslator
 
   defmodule Example do
     def f(x), do: x * x
   end
 
-  @xxx :"Elixir.Tria.TranslatorTest.X.X.X"
-  @xx :"Elixir.Tria.TranslatorTest.X.X"
-  @x :"Elixir.Tria.TranslatorTest.X"
+  defmacrop tri(opts \\ [], code) do
+    opts = [{:to_tria, false} | opts]
+    quote do: Tria.Tri.tri(unquote(opts), unquote(code))
+  end
 
-  describe "imports" do
+  @xxx :"Elixir.Tria.Translator.ElixirTest.X.X.X"
+  @xx :"Elixir.Tria.Translator.ElixirTest.X.X"
+  @x :"Elixir.Tria.Translator.ElixirTest.X"
+
+  describe "Imports" do
     test "simple" do
       assert(
         {:ok, q, _} =
@@ -26,8 +31,8 @@ defmodule Tria.TranslatorTest do
 
       assert(
         tri do
-          :"Elixir.Tria.TranslatorTest.Example"
-          tri({:., _, [:"Elixir.Tria.TranslatorTest.Example", :f]}, _, [1])
+          :"Elixir.Tria.Translator.ElixirTest.Example"
+          tri({:., _, [:"Elixir.Tria.Translator.ElixirTest.Example", :f]}, _, [1])
           f(1, 2, 3)
         end = q
       )
@@ -51,8 +56,8 @@ defmodule Tria.TranslatorTest do
       assert(
         tri do
           fn ->
-            :"Elixir.Tria.TranslatorTest.Example"
-            tri({:., _, [:"Elixir.Tria.TranslatorTest.Example", :f]}, _, [1])
+            :"Elixir.Tria.Translator.ElixirTest.Example"
+            tri({:., _, [:"Elixir.Tria.Translator.ElixirTest.Example", :f]}, _, [1])
           end
 
           fn ->
@@ -269,5 +274,36 @@ defmodule Tria.TranslatorTest do
         end
       end = q
     )
+  end
+
+  describe "Meta preservation" do
+    defp fetch({_, meta, _}, key), do: Keyword.fetch(meta, key)
+
+    test "Line" do
+      quoted =
+        quote location: :keep do
+          x + y
+          x = z
+          x = 1
+        end
+
+      {:ok, {file, line}} = fetch(quoted, :keep)
+      new_quoted = ElixirTranslator.to_tria!(quoted, __ENV__)
+      assert {:ok, file} == fetch(new_quoted, :file)
+      assert {:ok, line} == fetch(new_quoted, :line)
+    end
+  end
+
+  describe "Captures" do
+    test "just works" do
+      quoted =
+        quote do
+          Enum.map(list, & &1 + 1)
+        end
+
+      assert(tri do
+        Enum.map(_list, fn x -> Kernel.+(x, 1) end)
+      end = ElixirTranslator.to_tria!(quoted, __ENV__))
+    end
   end
 end

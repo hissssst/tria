@@ -4,6 +4,8 @@ defmodule Tria.Translator.Abstract do
   Erlang ATF to Tria translator
   It is designed to translate ATF provided in `abstract_code` chunk
   therefore it is unable to translate records, macros and parsetransforms
+
+  #TODO preserve `anno`
   """
 
   @behaviour Tria.Translator

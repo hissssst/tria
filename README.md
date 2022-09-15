@@ -20,9 +20,11 @@ Tria anguage differs from Elixir:
 
 ### TODO
 
+[ ] Purity table invalidation based on module hash
+
 [ ] PGO for inlining. We can always inline functions which are called once
 
-[ ] Implement `Bindings` as a structure, this will deduplicate
+[x] Implement `Bindings` as a structure, this will deduplicate
     a ton of code
 
 [ ] Implement `fold` function to fold bindings into ast

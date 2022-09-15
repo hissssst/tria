@@ -1,11 +1,36 @@
 defmodule Tria do
-  # alias Tria.Translator.Elixir, as: ElixirTranslator
+
+  @moduledoc """
+  Optimizing transpiler for Elixir language.
+  """
+
+  alias Tria.Translator.Elixir, as: ElixirTranslator
   import Tria.Common
 
-  @type t :: Macro.t()
-  @type variable :: {atom(), list(), atom()}
-  @type special_form :: {}
-  @type call :: {atom(), list(), atom()}
+  @typedoc """
+  Tria is (mostly) a subset of Elixir language which differs in some ways from Elixir
+  Generally, it preserver the structure of Elixir's AST.
+
+  The only incompatible difference here is that Tria supports having integer instead of context
+  in the ast for variables. This is very handy for SSA transformations and stuff.
+
+  Tria language is designed for writing code transformations
+  """
+  @type t :: expression
+  | variable
+  | {t, t}
+  | [t]
+  | atom
+  | number
+  | binary
+
+  @type expression :: {expression | atom, meta, [t]}
+
+  @type variable :: {atom, meta, context}
+
+  @type context :: atom | integer
+
+  @type meta :: Keyword.t()
 
   # Public interface
 
@@ -22,20 +47,11 @@ defmodule Tria do
   @spec run(Macro.t(), Macro.Env.t()) :: Macro.t()
   def run(quoted, env) do
     quoted
-    |> Tria.Translator.Elixir.to_tria!(env)
+    |> ElixirTranslator.to_tria!(env)
     |> inspect_ast(label: :after_translation)
     |> run_while()
     |> inspect_ast(label: :result, with_contexts: true)
-    # |> IO.inspect(label: :result_ast)
-    # |> tap(fn ast ->
-    #   Macro.prewalk(ast, fn
-    #     v when is_variable(v) ->
-    #       IO.inspect v
-
-    #     other ->
-    #       other
-    #   end)
-    # end)
+    |> ElixirTranslator.from_tria()
   end
 
   defmacro __using__(context: context) do
@@ -170,25 +186,5 @@ defmodule Tria do
         ast
     end
   end
-  # defp run_while(ast, prev \\ nil)
-  # defp run_while(ast, ast), do: ast
-  # defp run_while(ast, prev) do
-  #   if Tria.Comparator.compare(ast, prev) do
-  #     ast
-  #   else
-  #     # inspect_ast(ast)
-  #     # inspect_ast(prev)
-  #     # Process.sleep(1000)
-
-  #     if Macro.to_string(ast) == Macro.to_string(prev) do
-  #       require IEx
-  #       IEx.pry()
-  #     end
-
-  #     ast
-  #     |> Tria.Pass.Evaluation.run_once!()
-  #     |> run_while(ast)
-  #   end
-  # end
 
 end

@@ -12,7 +12,11 @@ defmodule Tria.Translator.Elixir do
   @behaviour Tria.Translator
 
   import Tria.Common
-  import Tria.Tri
+  require Tria.Tri
+
+  defmacro tri(ast) do
+    quote do: Tria.Tri.tri([to_tria: false], unquote(ast))
+  end
 
   # Public
 
@@ -31,7 +35,15 @@ defmodule Tria.Translator.Elixir do
   end
 
   # Because Tria is a subset of Elixir
-  def from_tria(tria_ast), do: tria_ast
+  def from_tria(tria_ast) do
+    Macro.prewalk(tria_ast, fn
+      {name, meta, context} when is_integer(context) ->
+        {name, [{:counter, context} | meta], nil}
+
+      other ->
+        other
+    end)
+  end
 
   # Private
 
@@ -89,12 +101,13 @@ defmodule Tria.Translator.Elixir do
         {module, add_import(env, module, opts)}
 
       # Variable
-      {name, meta, ctx} = variable when is_variable(variable) ->
+      {name, meta, ctx} = variable when is_elixir_variable(variable) ->
+        counter = meta[:counter]
         variable =
-          if counter = meta[:counter] do
-            {name, [], :"#{ctx}#{inspect counter}"}
+          if counter do
+            {name, meta, counter}
           else
-            {name, [], ctx}
+            {name, meta, ctx}
           end
         {variable, add_variable(env, variable)}
         
@@ -118,18 +131,25 @@ defmodule Tria.Translator.Elixir do
         {q, env}
 
       # Closures
-      tri &call/arity when is_integer(arity) ->
+      {:&, meta, [{:/, slashmeta, [call, arity]}]} when is_integer(arity) ->
         {call, env} = expand_all(call, env)
-        {quote(do: &unquote(call)/unquote(arity)), env}
+        {{:&, meta, [{:/, slashmeta, [call, arity]}]}, env}
 
       {:"&", meta, [body]} ->
-        ctx = gen_uniq_context()
         {body, vars} =
-          Macro.prewalk(body, [], fn
+          # Why only one prewalk?
+          # Because nested captures are not allowed
+          # And one prewalk can translate the whole structure
+          prewalk(body, %{}, fn
             {:"&", _meta, [int]}, acc when is_integer(int) ->
-              # TODO translate meta too
-              v = {:"x#{int}", [], ctx}
-              {v, [{int, v} | acc]}
+              case acc do
+                %{^int => variable} ->
+                  {variable, acc}
+
+                _ ->
+                  variable = {:tria_capture, [counter: gen_uniq_context()], nil}
+                  {variable, Map.put(acc, int, variable)}
+              end
 
             other, acc ->
               {other, acc}
@@ -139,7 +159,6 @@ defmodule Tria.Translator.Elixir do
           vars
           |> Enum.sort()
           |> Enum.map(fn {_, v} -> v end)
-          |> Enum.uniq()
 
         expand_all({:fn, meta, [{:"->", [], [vars, body]}]}, env)
         
@@ -173,6 +192,12 @@ defmodule Tria.Translator.Elixir do
         {elseclause, _internal_env} = expand_clauses(elseclause, env)
 
         {{:with, meta, clauses ++ [[do: doclause, else: elseclause]]}, env}
+
+      # When
+      {:when, meta, [pattern, guards]} ->
+        {pattern, _env} = expand_all(pattern, %Macro.Env{env | context: :match})
+        {guards, _env} = expand_all(guards, %Macro.Env{env | context: :guard})
+        {:when, meta, [pattern, guards]}
 
       # Calls
       dot_call(aliased, function, args) ->
@@ -246,6 +271,14 @@ defmodule Tria.Translator.Elixir do
             IO.inspect literal, pretty: true, label: :not_implemented
             raise "Not implemented"
         end
+    end
+    # Here we translate the metadata
+    |> case do
+      {{node, meta, children}, env} ->
+        {{node, ease(meta), children}, env}
+
+      other ->
+        other
     end
   rescue
     e ->
@@ -359,10 +392,9 @@ defmodule Tria.Translator.Elixir do
   defp normalize_alias_to({:__aliases__, _, modules}), do: Module.concat(modules)
   defp normalize_alias_to(module), do: Module.concat([module])
 
-  defp special_form?(:in, 2), do: true #FIXME
-  defp special_form?(:when, _), do: true
   defp special_form?(:".", _), do: true
-  defp special_form?(name, arity), do: Macro.special_form?(name, arity)
+  defp special_form?(op, arity) when is_integer(arity), do: Macro.special_form?(op, arity)
+  # defp special_form?(op, args) when is_list(args), do: Macro.special_form?(op, length(args))
 
   # Checks if this function is defined anywhere
   defp defines?(module, function, arity) do
@@ -373,6 +405,22 @@ defmodule Tria.Translator.Elixir do
     end
   rescue
     ArgumentError -> false
+  end
+
+  # Meta Triafication
+
+  # When
+  defp ease(meta) do
+    case meta[:keep] do
+      {file, line} ->
+        meta
+        |> Keyword.put(:line, line)
+        |> Keyword.put(:file, file)
+
+      _ ->
+        meta
+    end
+    |> Keyword.take(~w[file line generated ambiguous_op var]a)
   end
 
 end

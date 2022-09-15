@@ -6,6 +6,8 @@ defmodule Tria.Analyzer.Purity.TTYProvider do
   asked at a time
   """
 
+  import Tria.Common, only: [ast_to_string: 1]
+
   alias Tria.Analyzer.Purity.Provider
   @behaviour Provider
 
@@ -61,11 +63,11 @@ defmodule Tria.Analyzer.Purity.TTYProvider do
   end
 
   defp prompt({m, f, a}, stack) when is_empty(stack) do
-    "===\n#{Macro.to_string {{:".", [], [m, f]}, [], a}}\n===\nIs pure [y(yes); n(no)] "
+    "===\n#{ast_to_string {{:".", [], [m, f]}, [], a}}\n===\nIs pure [y(yes); n(no)] "
   end
 
   defp prompt({m, f, a}, _) do
-    "===\n#{Macro.to_string {{:".", [], [m, f]}, [], a}}\n===\nIs pure [y(yes); n(no); s(stack)] "
+    "===\n#{ast_to_string {{:".", [], [m, f]}, [], a}}\n===\nIs pure [y(yes); n(no); s(stack)] "
   end
 
 end

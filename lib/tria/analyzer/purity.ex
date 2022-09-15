@@ -1,5 +1,9 @@
 defmodule Tria.Analyzer.Purity do
 
+  @moduledoc """
+  Module which analyzes AST for Purity
+  """
+
   import Tria.Common
   import Tria.Tri
 
@@ -15,7 +19,7 @@ defmodule Tria.Analyzer.Purity do
   def run_analyze(ast) do
     {type, result} = 
       ast
-      |> Macro.postwalk(fn
+      |> postwalk(fn
         dot_call(m, f, a) = mfa ->
           if lookup {m, f, a} do
             mfa
@@ -46,7 +50,7 @@ defmodule Tria.Analyzer.Purity do
   Checks if effect calls are present in ast
   """
   def check_analyze(ast, stack \\ []) do
-    Macro.prewalk(ast, [], fn
+    prewalk(ast, [], fn
       dot_call(m, f, a), acc ->
         mfa = {unalias(m), f, a}
         if lookup(mfa, stack) do
@@ -67,31 +71,34 @@ defmodule Tria.Analyzer.Purity do
     end
   end
 
-  defp lookup({m, f, a} = mfa, stack) when is_atom(m) do
+  defp lookup({m, f, a} = mfa, stack) when is_atom(m) and is_list(a) do
     mfarity = arityfy mfa
     if mfarity in stack do
       # Recursive functions are considered pure
       true
     else
-      with nil <- FunctionRepo.lookup mfa, :pure do
+      with nil <- FunctionRepo.lookup(mfarity, :pure) do
         dotted = {{:".", [], [m, f]}, [], a}
         case Analyzer.fetch_tria(mfa) do
           # No function found
           nil ->
-            Provider.is_pure(mfa, stack: stack)
+            pure? = Provider.is_pure(mfa, stack: stack)
+            FunctionRepo.insert(mfa, :pure, pure?)
 
           # Is a NIF or BIF function
           {:fn, _, [{:"->", _, [_, dot_call(:erlang, :nif_error, _)]}]} ->
-            Provider.is_pure(mfa, stack: stack)
+            pure? = Provider.is_pure(mfa, stack: stack)
+            FunctionRepo.insert(mfa, :pure, pure?)
 
           # Is an Elixir bootstrap
           {:fn, _, [{:"->", _, [_, ^dotted]}]} ->
-            Provider.is_pure(mfa, stack: stack)
+            pure? = Provider.is_pure(mfa, stack: stack)
+            FunctionRepo.insert(mfa, :pure, pure?)
 
+          # Anything else, and for this we don't insert the purity check
+          # TODO maybe move this in cache
           ast ->
-            # IO.inspect mfa
             res = check_analyze(ast, [mfarity | stack])
-            FunctionRepo.insert(mfa, :pure, res)
             res
         end
       end
