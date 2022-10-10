@@ -166,6 +166,12 @@ defmodule Tria.Interpreter do
   def match({left_pattern, right_pattern}, {left_ast, right_ast}) do
     merge(match(left_pattern, left_ast), match(right_pattern, right_ast))
   end
+  def match({left_pattern, right_pattern}, {:"{}", _, [left_ast, right_ast]}) do
+    merge(match(left_pattern, left_ast), match(right_pattern, right_ast))
+  end
+  def match({:"{}", _, [left_pattern, right_pattern]}, {left_ast, right_ast}) do
+    merge(match(left_pattern, left_ast), match(right_pattern, right_ast))
+  end
 
   # Tuple
   def match({:{}, _, patterns}, {:{}, _, asts}) do

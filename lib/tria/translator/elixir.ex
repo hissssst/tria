@@ -25,7 +25,7 @@ defmodule Tria.Translator.Elixir do
     ast
   rescue
     e ->
-      inspect_ast(ast)
+      inspect_ast(ast, label: :failed_translation)
       reraise e, __STACKTRACE__
   end
 
@@ -37,8 +37,16 @@ defmodule Tria.Translator.Elixir do
   # Because Tria is a subset of Elixir
   def from_tria(tria_ast) do
     Macro.prewalk(tria_ast, fn
+      # Translates variables to counters
       {name, meta, context} when is_integer(context) ->
         {name, [{:counter, context} | meta], nil}
+
+      # Makes structs from maps with :__struct__ key
+      # {:"%{}", meta, items} = map->
+      #   case Keyword.pop(items, :__struct__) do
+      #     {nil, _} -> map
+      #     {struct, items} -> {:%, meta, [struct, {:"%{}", meta, items}]}
+      #   end
 
       other ->
         other
@@ -95,34 +103,63 @@ defmodule Tria.Translator.Elixir do
         module = unalias(something, env)
         {module, add_import(env, module)}
 
-
       tri(import something, opts) ->
         module = unalias(something, env)
         {module, add_import(env, module, opts)}
 
+      # Quoted
+      # FIXME TODO handle opts
+      {:quote, _meta, opts_body} ->
+        {[do: body], _opts} = List.pop_at(opts_body, -1)
+        {body, env} = expand_quote(body, env)
+        {body, env}
+
       # Variable
-      {name, meta, ctx} = variable when is_elixir_variable(variable) ->
-        counter = meta[:counter]
-        variable =
-          if counter do
-            {name, meta, counter}
-          else
-            {name, meta, ctx}
-          end
+      variable when is_elixir_variable(variable) ->
+        variable = elixir_to_tria_variable(variable)
         {variable, add_variable(env, variable)}
         
-      # Collections
+      # List
       list when is_list(list) ->
         Enum.map_reduce(list, env, &expand_all/2)
 
+      # Twople
       {l, r} ->
         {l, env} = expand_all(l, env)
         {r, env} = expand_all(r, env)
         {{l, r}, env}
 
+      # Map Tuple
       {map_or_tuple, meta, items} when map_or_tuple in ~w[{} %{}]a ->
         {items, env} = expand_all(items, env)
         {{map_or_tuple, meta, items}, env}
+
+      # Binary
+      {:"<<>>", meta, items} ->
+        # Binary syntax can have variables and macros inside
+        # And operators (like `-`) are treated differently
+        {items, env} =
+          Enum.map_reduce(items, env, fn
+            {:"::", meta, [left, right]}, env ->
+              meta = ease(meta, env)
+              {left, env} = expand_all(left, env)
+              {right, env} =
+                Macro.postwalk(right, env, fn
+                  variable, env when is_elixir_variable(variable) ->
+                    variable = elixir_to_tria_variable(variable)
+                    {variable, add_variable(env, variable)}
+
+                  other, env ->
+                    {Macro.expand(other, env), env}
+                end)
+              { {:"::", meta, [left, right]}, env }
+
+            other, env ->
+              {Macro.expand(other, env), env}
+          end)
+
+        { {:"<<>>", meta, items}, env }
+              
 
       # Structures
       tri %module{tri_splicing items} ->
@@ -161,7 +198,8 @@ defmodule Tria.Translator.Elixir do
           |> Enum.map(fn {_, v} -> v end)
 
         expand_all({:fn, meta, [{:"->", [], [vars, body]}]}, env)
-        
+
+      # Fn
       {:fn, meta, clauses} ->
         {clauses, _internal_env} = expand_clauses(clauses, env)
         {{:fn, meta, clauses}, env}
@@ -177,11 +215,13 @@ defmodule Tria.Translator.Elixir do
           end)
         {{:cond, meta, [[do: clauses]]}, env}
 
+      # Case
       {:case, meta, [arg, [do: clauses]]} ->
         {arg, env} = expand_all(arg, env)
         {clauses, _} = expand_clauses(clauses, env)
         {{:case, meta, [arg, [do: clauses]]}, env}
 
+      # With
       {:with, meta, clauses} ->
         {clauses, [doelse]} = Enum.split(clauses, -1)
         doclause = Keyword.fetch!(doelse, :do)
@@ -191,13 +231,19 @@ defmodule Tria.Translator.Elixir do
         {doclause, _env} = expand_all(doclause, clauses_env)
         {elseclause, _internal_env} = expand_clauses(elseclause, env)
 
-        {{:with, meta, clauses ++ [[do: doclause, else: elseclause]]}, env}
+        case elseclause do
+          e when e in [nil, []] ->
+            {{:with, meta, clauses ++ [[do: doclause]]}, env}
+
+          _ ->
+            {{:with, meta, clauses ++ [[do: doclause, else: elseclause]]}, env}
+        end
 
       # When
       {:when, meta, [pattern, guards]} ->
         {pattern, _env} = expand_all(pattern, %Macro.Env{env | context: :match})
         {guards, _env} = expand_all(guards, %Macro.Env{env | context: :guard})
-        {:when, meta, [pattern, guards]}
+        {{:when, meta, [pattern, guards]}, env}
 
       # Calls
       dot_call(aliased, function, args) ->
@@ -267,6 +313,7 @@ defmodule Tria.Translator.Elixir do
           true ->
             {literal, env}
 
+
           false ->
             IO.inspect literal, pretty: true, label: :not_implemented
             raise "Not implemented"
@@ -275,17 +322,57 @@ defmodule Tria.Translator.Elixir do
     # Here we translate the metadata
     |> case do
       {{node, meta, children}, env} ->
-        {{node, ease(meta), children}, env}
+        {{node, ease(meta, env), children}, env}
 
       other ->
         other
     end
   rescue
     e ->
-      if env.context do
-        IO.inspect ast, label: :failed_ast
-      end
+      inspect_ast(ast, label: :failed, with_contexts: true)
       reraise e, __STACKTRACE__
+  end
+
+  # Expands body of `quote`
+
+  defp expand_quote([{:unquote_splicing, _, [unquoted]} | tail], env) do
+    {unquoted, env} = expand_all(unquoted, env)
+    {tail, env} = expand_quote(tail, env)
+    case unquoted do
+      list when is_list(list) ->
+        { list ++ tail, env }
+
+      _unquoted ->
+        raise "Not implemented"
+    end
+  end
+
+  defp expand_quote({:unquote, _, [unquoted]}, env) do
+    expand_all(unquoted, env)
+    |> tap(fn {x, _} -> IO.inspect(x, label: :unquoted) end)
+  end
+
+  defp expand_quote({left, right}, env) do
+    {left, env} = expand_quote(left, env)
+    {right, env} = expand_quote(right, env)
+    { {left, right}, env }
+  end
+
+  defp expand_quote([head | tail], env) do
+    {head, env} = expand_quote(head, env)
+    {tail, env} = expand_quote(tail, env)
+    { [head | tail], env }
+  end
+
+  defp expand_quote({operation, meta, args}, env) do
+    {operation, env} = expand_quote(operation, env)
+    {args, env} = expand_quote(args, env)
+    
+    { {:{}, [], [operation, meta, args]}, env }
+  end
+
+  defp expand_quote(literal, env) do
+    {literal, env}
   end
 
   # With clauses are inherited
@@ -410,7 +497,7 @@ defmodule Tria.Translator.Elixir do
   # Meta Triafication
 
   # When
-  defp ease(meta) do
+  defp ease(meta, %Macro.Env{file: file}) do
     case meta[:keep] do
       {file, line} ->
         meta
@@ -419,8 +506,28 @@ defmodule Tria.Translator.Elixir do
 
       _ ->
         meta
+        |> Keyword.put(:file, file)
     end
     |> Keyword.take(~w[file line generated ambiguous_op var]a)
   end
+
+  defp elixir_to_tria_variable({name, meta, _context} = variable) do
+    case meta[:counter] do
+      # FIXME, needs proper translation, because I am not sure that these
+      # intergers are unique in all contexts
+      {_context, integer} ->
+        {name, meta, integer}
+
+      nil ->
+        variable
+
+      integer when is_integer(integer) ->
+        {name, meta, integer}
+    end
+  end
+
+  #FIXUP twople represented as tuple
+  # defp {:"{}", _meta, [left, ight]}), do: {left, right}
+  # defp maybe_twople(other), do: other
 
 end

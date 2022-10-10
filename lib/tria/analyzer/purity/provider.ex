@@ -11,9 +11,9 @@ defmodule Tria.Analyzer.Purity.Provider do
   @type opts :: Keyword.t()
 
   @doc "Returns if the Module.function is pure. Args and opts are passed just for info"
-  @callback is_pure({atom(), atom(), list()}, opts) :: true | false
+  @callback is_pure({atom(), atom(), [Tria.t()]}, opts) :: true | false
 
-  @spec is_pure({atom(), atom(), list()}, opts) :: true | false
+  @spec is_pure({atom(), atom(), [Tria.t()]}, opts) :: true | false
   def is_pure(mfacall, opts), do: default_analyzer().is_pure(mfacall, opts)
 
   defp default_analyzer() do

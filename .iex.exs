@@ -1,3 +1,3 @@
 import Tria.Common
 import Tria.Tri
-alias Tria.{Analyzer, Fundb, Interpreter, Analyzer.Purity, Pass.Evaluation}
+alias Tria.{Analyzer, FunctionRepo, Interpreter, Analyzer.Purity, Pass.Evaluation}

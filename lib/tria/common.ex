@@ -125,36 +125,48 @@ defmodule Tria.Common do
   """
   @spec ast_to_string(Tria.t(), Keyword.t()) :: String.t()
   def ast_to_string(ast, opts \\ []) do
-    if Keyword.get(opts, :with_contexts, false) do
-      Macro.prewalk(ast, fn
-        {name, meta, ctx} = v when is_variable(v) and (name == :_ or ctx == nil) ->
-          {name, meta, nil}
+    unformatted =
+      if Keyword.get(opts, :with_contexts, false) do
+        Macro.prewalk(ast, fn
+          {name, meta, {context, counter}} when is_atom(context) and is_integer(counter) ->
+            {:"#{name}_#{context}_#{counter}", meta, nil}
 
-        {name, meta, ctx} = v when is_variable(v) ->
-          {:"#{name}_#{ctx}", meta, nil}
+          {:_, meta, _} = v when is_variable(v) ->
+            {:_, meta, nil}
 
-        other ->
-          other
-      end)
-    else
-      Macro.prewalk(ast, fn
-        {name, meta, context} when is_integer(context) ->
-          {name, meta, nil}
+          {name, meta, nil} ->
+            {:"#{name}_nil", meta, nil}
 
-        other ->
-          other
-      end)
-    end
-    |> Macro.to_string()
-    |> Code.format_string!()
-  rescue
-    _ ->
-      ast
+          {name, meta, ctx} = v when is_variable(v) ->
+            {:"#{name}_#{ctx}", meta, nil}
+
+          other ->
+            other
+        end)
+      else
+        Macro.prewalk(ast, fn
+          {name, meta, context} when is_integer(context) ->
+            {name, meta, nil}
+
+          other ->
+            other
+        end)
+      end
+      # Fixes the https://github.com/elixir-lang/elixir/issues/12162
       |> Macro.prewalk(fn
-        {name, meta, context} when is_integer(context) -> {name, meta, nil}
-        other -> other
+        {{:".", _, [:erlang, :binary_to_atom]}, _, [{:"<<>>", _, items}, :utf8]} ->
+          {{:".", [], [:erlang, :binary_to_atom]}, [], [{:"<<>>", [], items}, :utf1488]}
+
+        other ->
+          other
       end)
       |> Macro.to_string()
+
+    try do
+      Code.format_string!(unformatted)
+    rescue
+      _ -> unformatted
+    end
   end
 
   @doc """

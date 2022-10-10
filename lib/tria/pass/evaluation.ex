@@ -1,7 +1,9 @@
 defmodule Tria.Pass.Evaluation do
 
   @moduledoc """
-  Pass which evaluates, propagates and drops dead code in one run
+  !Runs on SSA form only
+
+  Pass which evaluates, propagates and drops local dead code in one run
   This pass performs almost no analysis and just tries to preevaluate any
   forms it comes accross.
 
@@ -27,9 +29,10 @@ defmodule Tria.Pass.Evaluation do
   alias Tria.Analyzer.Purity
   alias Tria.Interpreter
   alias Tria.Matchlist
+  alias Tria.Translator.SSA
 
   defstruct [
-    bindings: Matchlist.empty(), # Maps current bindings is context
+    bindings: %{}, # Maps current bindings is context
     hooks: %{}
   ]
 
@@ -50,7 +53,8 @@ defmodule Tria.Pass.Evaluation do
     run_once(ast, struct!(__MODULE__, evaluation_context))
   end
   def run_once(ast, evaluation_context) do
-    {code, _evaluation_context} = do_run(ast, evaluation_context)
+    inspect_ast(ast, label: :running_over, with_contexts: true)
+    {code, _evaluation_context} = run(ast, evaluation_context)
     case Process.delete(:hit) do
       true ->
         {:ok, code}
@@ -64,26 +68,54 @@ defmodule Tria.Pass.Evaluation do
       reraise e, __STACKTRACE__
   end
 
+  # Bindings helpers
+
   def fetch_bind(%{bindings: bindings}, key) do
-    Matchlist.fetch(bindings, key)
+    Map.fetch(bindings, key)
   end
 
-  def put_bind(cfg, {name, _, _}, {bind_to_name, _, _}) when :_ in [name, bind_to_name], do: cfg
-  def put_bind(%{bindings: bindings} = cfg, key, value) do
-    key = Matchlist.fold(key, bindings)
-    value = Matchlist.fold(value, bindings)
-    bindings = Matchlist.put(bindings, key, value)
-    %{cfg | bindings: bindings}
+  def put_bind(%{bindings: bindings} = evaluation_context, key, value) do
+    %{evaluation_context | bindings: do_put_bind(bindings, key, value)}
+  end
+
+  def put_binds(%{bindings: bindings} = evaluation_context, binds) do
+    bindings =
+      Enum.reduce(binds, bindings, fn {key, value}, bindings ->
+        do_put_bind(bindings, key, value)
+      end)
+
+    %{evaluation_context | bindings: bindings}
+  end
+
+  defp do_put_bind(bindings, {name, _, _}, {bind_to_name, _, _}) when :_ in [name, bind_to_name], do: bindings
+  defp do_put_bind(bindings, key, value) do
+    key = fold(key, bindings)
+    value = fold(value, bindings)
+    if key != value do
+      Map.put(bindings, key, value)
+    else
+      bindings
+    end
+  end
+
+  def unmeta(something) do
+    prewalk(something, &Macro.update_meta(&1, fn _ -> [] end))
+  end
+
+  def fold(value, bindings) do
+    value
+    |> unmeta()
+    |> postwalk(&Map.get(bindings, &1, &1))
   end
 
   # Implementation
 
-  # # This could've been a function, but it is a macro for debugging
+  # This could've been a function, but it is a macro for debugging
   # defmacrop hit do
   #   quote do
   #     Process.put(:hit, true)
-  #     # IO.puts "Hit on #{unquote __CALLER__.line}"
-  #     # Process.sleep(10)
+  #     IO.puts "Hit on #{unquote __CALLER__.line}"
+  #     Process.sleep(10)
   #   end
   # end
 
@@ -91,14 +123,14 @@ defmodule Tria.Pass.Evaluation do
   defp hit, do: Process.put(:hit, true)
 
   # Main recursive function
-  defp do_run(code, evaluation_context) do
+  defp run(code, evaluation_context) do
     {code, evaluation_context} = run_hook(code, evaluation_context, :before)
     case code do
       # Block
       {:__block__, meta, block} ->
         {lines, new_evaluation_context} =
           Enum.flat_map_reduce(block, evaluation_context, fn line, evaluation_context ->
-            {line, evaluation_context} = do_run(line, evaluation_context)
+            {line, evaluation_context} = run(line, evaluation_context)
             case line do
               {:__block__, _, lines} ->
                 {lines, evaluation_context}
@@ -112,7 +144,7 @@ defmodule Tria.Pass.Evaluation do
           evaluation_context
           |> drop_literals_in_block(lines)
           |> case do
-            [] -> raise "Somebody fucked up"
+            [] -> raise "This should never happen"
             [line] -> line
             lines -> {:__block__, meta, lines}
           end
@@ -122,8 +154,8 @@ defmodule Tria.Pass.Evaluation do
 
       # Equals
       tri left = right ->
-        {left, left_evaluation_context} = propagate_to_pattern(left, evaluation_context)
-        {right, right_evaluation_context} = do_run(right, evaluation_context)
+        {left, left_evaluation_context} = run_pattern(left, evaluation_context)
+        {right, right_evaluation_context} = run(right, evaluation_context)
 
         case Interpreter.match(left, right) do
           {:yes, binds} ->
@@ -142,7 +174,6 @@ defmodule Tria.Pass.Evaluation do
                       {put_bind(evaluation_context, variable, value), [bind_to_equal(bind) | binds]}
 
                     true ->
-                      hit()
                       {put_bind(evaluation_context, variable, value), [bind_to_equal(bind) | binds]}
                   end
               end)
@@ -152,11 +183,16 @@ defmodule Tria.Pass.Evaluation do
                 # No binds, hmmm.
                 # In case this is something like `1 = 1`
                 [] ->
+                  hit()
                   right
 
+                [bind] ->
+                  bind
+
                 # In case there are multiple binds
-                _binds ->
-                  quote do: unquote(left) = unquote(right)
+                binds ->
+                  hit()
+                  {:__block__, [], binds}
               end
 
             evaluation_context = evaluation_context <~ left_evaluation_context
@@ -165,7 +201,7 @@ defmodule Tria.Pass.Evaluation do
           :no ->
             hit()
             IO.warn "This bind will never match"
-            body = quote do: raise "Will never match"
+            body = quote do: raise MatchError, term: unquote right
             {body, evaluation_context <~ right_evaluation_context <~ left_evaluation_context}
 
           {:maybe, _} ->
@@ -178,35 +214,56 @@ defmodule Tria.Pass.Evaluation do
 
       # Case
       tri case(arg, do: clauses) ->
-        {arg, evaluation_context} = do_run(arg, evaluation_context)
-        code = optimize_clauses([arg], clauses, evaluation_context)
+        {arg, evaluation_context} = run(arg, evaluation_context)
+        code = optimize_clauses([arg], clauses, evaluation_context, fn [arg] -> quote do: raise CaseClauseError, term: unquote arg end)
         {code, evaluation_context}
 
-      # Fn inlining
-      # This one can be used to inline regular MFA functions.
-      # One can just fetch Tria and place it here
-      {{:".", _, [{:fn, _, clauses}]}, _, args} ->
+      # Fn Inlining
+      {{:".", _dotmeta, [{:fn, _, clauses}]}, _meta, args} ->
         hit() # This one is always optimized into case
-        {args, evaluation_context} = do_run(args, evaluation_context)
-        code = optimize_clauses(args, clauses, evaluation_context)
+        #TODO this doesn't have to be always optimized into case. Sometimes inlined fn is faster
+
+        {args, evaluation_context} = run(args, evaluation_context)
+        code =
+          optimize_clauses(args, clauses, evaluation_context, fn args ->
+            quote do: raise FunctionClauseError, args: unquote(args)
+          end)
         {code, evaluation_context}
 
       # Fn
-      {:fn, _, clauses} ->
+      {:fn, meta, clauses} ->
         clauses =
           clauses
-          |> Enum.map(fn {:"->", _, [left, right]} ->
-            {left, left_evaluation_context} = propagate_to_pattern(left, evaluation_context)
-            {right, _right_evaluation_context} = do_run(right, evaluation_context <~ left_evaluation_context)
+          |> Enum.map(fn {:"->", meta, [left, right]} ->
+            {left, left_evaluation_context} = run_pattern(left, evaluation_context)
+            {right, _right_evaluation_context} = run(right, evaluation_context <~ left_evaluation_context)
 
-            {:"->", [], [left, right]}
+            {:"->", meta, [left, right]}
           end)
 
-        {{:fn, [], clauses}, evaluation_context}
+        {{:fn, meta, clauses}, evaluation_context}
 
       # For
-      {:for, _meta, _iters_and_stuff} ->
-        raise "Not implemented yet"
+      {:for, meta, iters_opts_body} ->
+        {opts_body, iters} = List.pop_at(iters_opts_body, -1)
+        {body, opts} = Keyword.pop!(opts_body, :do)
+
+        {iters, inner_evaluation_context} = run_left_arrow_clauses(iters, evaluation_context)
+        {opts, inner_evaluation_context} = run(opts, inner_evaluation_context)
+
+        body =
+          case body do
+            {:"->", meta, [left, right]} ->
+              {left, left_evaluation_context} = run_pattern(left, inner_evaluation_context)
+              {right, _right_evaluation_context} = run(right, inner_evaluation_context <~ left_evaluation_context)
+              {:"->", meta, [left, right]}
+
+            body ->
+              {body, _evaluation_context} = run(body, inner_evaluation_context)
+              body
+          end
+
+        {{:for, meta, iters ++ [opts ++ [do: body]]}, evaluation_context}
 
       # With
       #FIXME add ability to parse arbitary statements in with
@@ -214,22 +271,12 @@ defmodule Tria.Pass.Evaluation do
         {[{:do, do_clause} | else_clause?], clauses} = List.pop_at(clauses, -1)
         else_clauses = Keyword.get(else_clause?, :else, [])
 
-        {clauses, do_evaluation_context} =
-          Enum.map_reduce(clauses, evaluation_context, fn {op, meta, [left, right]}, evaluation_context ->
-            {right, _right_conf} = do_run(right, evaluation_context)
-            {left, left_evaluation_context} = propagate_to_pattern(left, evaluation_context)
-
-            {
-              {op, meta, [left, right]},
-              evaluation_context <~ left_evaluation_context
-            }
-          end)
-
-        {do_clause, _} = do_run(do_clause, do_evaluation_context)
+        {clauses, do_evaluation_context} = run_left_arrow_clauses(clauses, evaluation_context)
+        {do_clause, _} = run(do_clause, do_evaluation_context)
 
         # #TODO optimize else_clauses
         # {tri(case(_, do: else_clauses)), _} =
-        #   do_run(quote(do: case(x, do: unquote(else_clauses))), evaluation_context)
+        #   run(quote(do: case(x, do: unquote(else_clauses))), evaluation_context)
         case else_clauses do
           e when e in [[], nil] ->
             {{:with, meta, clauses ++ [[do: do_clause]]}, evaluation_context}
@@ -241,11 +288,11 @@ defmodule Tria.Pass.Evaluation do
       # Map cons
       # TODO think about joining in map cons
       {:"%{}", map_meta, [{:"|", cons_meta, [map, pairs]}]} ->
-        {map, map_evaluation_context} = do_run(map, evaluation_context)
+        {map, map_evaluation_context} = run(map, evaluation_context)
         {pairs, evaluation_context} =
           Enum.map_reduce(pairs, map_evaluation_context, fn {key, value}, new_evaluation_context ->
-            {key, key_evaluation_context} = do_run(key, evaluation_context)
-            {value, value_evaluation_context} = do_run(value, evaluation_context)
+            {key, key_evaluation_context} = run(key, evaluation_context)
+            {value, value_evaluation_context} = run(value, evaluation_context)
             {{key, value}, new_evaluation_context <~ key_evaluation_context <~ value_evaluation_context}
           end)
 
@@ -265,8 +312,8 @@ defmodule Tria.Pass.Evaluation do
       tri %{tri_splicing pairs} ->
         {pairs, evaluation_context} =
           Enum.map_reduce(pairs, evaluation_context, fn {key, value}, new_evaluation_context ->
-            {key, key_evaluation_context} = do_run(key, evaluation_context)
-            {value, value_evaluation_context} = do_run(value, evaluation_context)
+            {key, key_evaluation_context} = run(key, evaluation_context)
+            {value, value_evaluation_context} = run(value, evaluation_context)
             {{key, value}, new_evaluation_context <~ key_evaluation_context <~ value_evaluation_context}
           end)
 
@@ -276,20 +323,23 @@ defmodule Tria.Pass.Evaluation do
         }
 
       # Binary
-      tri <<tri_splicing items>> ->
+      {:"<<>>", meta, items} ->
+        # Matchlist.inspect(evaluation_context.bindings, label: :bindings_in_binary, with_contexts: true)
         {items, evaluation_contexts} =
           Enum.map(items, fn
             # TODO find out if the propagation is required for the right side
-            tri(item :: type) ->
-              {item, new_evaluation_context} = do_run(item, evaluation_context)
-              {quote(do: unquote(item) :: unquote(type)), new_evaluation_context}
+            # UPD: It is required, but I am not sure if it is safe just to propagate to the right side
+            {:"::", meta, [item, type]} ->
+              {item, new_evaluation_context} = run(item, evaluation_context)
+              {type, _type_evaluation_context} = run(type, evaluation_context)
+              {{:"::", meta, [item, type]}, new_evaluation_context}
 
             item ->
-              do_run(item, evaluation_context)
+              run(item, evaluation_context)
           end)
           |> Enum.unzip()
 
-        {quote(do: <<unquote_splicing(items)>>), merge_evaluation_contexts(evaluation_contexts)}
+        {{:"<<>>", meta, items}, merge_evaluation_contexts(evaluation_contexts)}
 
       # Empty list
       [] ->
@@ -299,7 +349,7 @@ defmodule Tria.Pass.Evaluation do
       items when is_list(items) ->
         {items, evaluation_contexts} =
           items
-          |> Enum.map(fn item -> do_run(item, evaluation_context) end)
+          |> Enum.map(fn item -> run(item, evaluation_context) end)
           |> Enum.unzip()
 
         # Handle cons
@@ -316,18 +366,18 @@ defmodule Tria.Pass.Evaluation do
 
       # Twople
       {left, right} ->
-        {left, left_evaluation_context} = do_run(left, evaluation_context)
-        {right, right_evaluation_context} = do_run(right, evaluation_context)
+        {left, left_evaluation_context} = run(left, evaluation_context)
+        {right, right_evaluation_context} = run(right, evaluation_context)
         {{left, right}, left_evaluation_context <~ right_evaluation_context}
 
       # Tuple
       tri {tri_splicing items} ->
-        {items, evaluation_context} = do_run(items, evaluation_context)
+        {items, evaluation_context} = run(items, evaluation_context)
         {quote(do: {unquote_splicing(items)}), evaluation_context}
 
       # MFA dot_call Dotcall
       dot_call(module, func, args) when is_atom(module) and is_atom(func) ->
-        {args, args_evaluation_context} = do_run(args, evaluation_context)
+        {args, args_evaluation_context} = run(args, evaluation_context)
         call = dot_call(module, func, args)
         if Enum.all?(args, &Macro.quoted_literal?/1) and precomputable?(evaluation_context, call) do
           {maybe_eval(call), args_evaluation_context}
@@ -338,8 +388,8 @@ defmodule Tria.Pass.Evaluation do
       # Dot
       # TODO evaluate something like `%{x: 1}.x`
       {{:., dotmeta, dot}, meta, args} ->
-        {dot, dot_evaluation_context} = do_run(dot, evaluation_context)
-        {args, args_evaluation_context} = do_run(args, evaluation_context)
+        {dot, dot_evaluation_context} = run(dot, evaluation_context)
+        {args, args_evaluation_context} = run(args, evaluation_context)
 
         {
           {{:., dotmeta, dot}, meta, args},
@@ -348,7 +398,7 @@ defmodule Tria.Pass.Evaluation do
 
       # Function call
       {func, meta, args} when is_list(args) ->
-        {args, args_evaluation_context} = do_run(args, evaluation_context)
+        {args, args_evaluation_context} = run(args, evaluation_context)
         call = {func, meta, args}
         if Enum.all?(args, &Macro.quoted_literal?/1) and precomputable?(evaluation_context, call) do
           {maybe_eval(call), args_evaluation_context}
@@ -357,17 +407,30 @@ defmodule Tria.Pass.Evaluation do
         end
 
       # Variable
-      var when is_variable(var) ->
-        case fetch_bind(evaluation_context, var) do
+      variable when is_variable(variable) ->
+        case fetch_bind(evaluation_context, variable) do
           :error ->
-            {var, evaluation_context}
-
-          {:ok, variable} when is_variable(variable) ->
             {variable, evaluation_context}
 
           {:ok, value} ->
-            hit()
-            {value, evaluation_context}
+            cond do
+              is_variable(value) ->
+                hit()
+                {value, evaluation_context}
+
+              Macro.quoted_literal?(value) ->
+                hit()
+                {value, evaluation_context}
+
+              is_fn(value) ->
+                hit()
+                # When inlining `fn`-s we want to rearrange static assignments
+                value = SSA.from_tria(value)
+                {value, evaluation_context}
+
+              true ->
+                {variable, evaluation_context}
+            end
         end
 
       # Literal
@@ -377,19 +440,34 @@ defmodule Tria.Pass.Evaluation do
     |> run_hook(:after)
   end
 
+  ## Clauses helpers
+
+  defp run_left_arrow_clauses(clauses, evaluation_context) do
+    Enum.map_reduce(clauses, evaluation_context, fn
+      {:"<-", meta, [left, right]}, evaluation_context ->
+        {left, left_evaluation_context} = run_pattern(left, evaluation_context)
+        {right, _right_evaluation_context} = run(right, evaluation_context)
+        { {:"<-", meta, [left, right]}, evaluation_context <~ left_evaluation_context }
+
+      other, evaluation_context ->
+        {other, _evaluation_context} = run(other, evaluation_context)
+        {other, evaluation_context}
+    end)
+  end
+
   ## Propagating to pattern
 
   # This function just puts values into the pattern and translates the contexts in the pattern
   # to make the SSA form of the code
-  def propagate_to_pattern(code, evaluation_context, new_evaluation_context \\ %__MODULE__{}) do
+  def run_pattern(code, evaluation_context, new_evaluation_context \\ %__MODULE__{}) do
     case code do
       # When
       {:when, meta, pattern_and_guard} ->
         {guard, patterns} = List.pop_at(pattern_and_guard, -1)
-        {patterns, pattern_evaluation_context} = propagate_to_pattern(patterns, evaluation_context, new_evaluation_context)
+        {patterns, pattern_evaluation_context} = run_pattern(patterns, evaluation_context, new_evaluation_context)
 
         # Since guard is not creating new variables, we can just run evaluation against it
-        {guard, _guard_evaluation_context} = do_run(guard, evaluation_context <~ pattern_evaluation_context)
+        {guard, _guard_evaluation_context} = run(guard, evaluation_context <~ pattern_evaluation_context)
 
         {{:when, meta, patterns ++ [guard]}, pattern_evaluation_context}
 
@@ -412,40 +490,27 @@ defmodule Tria.Pass.Evaluation do
             end
         end
 
-      # Variable
-      variable when is_variable(variable) ->
-        case fetch_bind(new_evaluation_context, variable) do
-          :error ->
-            # It appears that it is the new variable
-            new_variable = unify(variable)
-            {new_variable, put_bind(new_evaluation_context, variable, new_variable)}
-
-          {:ok, variable} ->
-            # It appears that the variable is present multiple times in the pattern
-            {variable, new_evaluation_context}
-        end
-
       # Map Tuple Binary or matchable operator <>
       {n, m, items} when is_list(items) ->
-        {items, new_evaluation_context} = propagate_to_pattern(items, evaluation_context, new_evaluation_context)
+        {items, new_evaluation_context} = run_pattern(items, evaluation_context, new_evaluation_context)
         {{n, m, items}, new_evaluation_context}
 
       # List
       items when is_list(items) ->
         Enum.map_reduce(items, new_evaluation_context, fn item, acc_evaluation_context ->
-          propagate_to_pattern(item, evaluation_context, acc_evaluation_context)
+          run_pattern(item, evaluation_context, acc_evaluation_context)
         end)
 
       # Twople
       {left, right} ->
-        {left, new_evaluation_context} = propagate_to_pattern(left, evaluation_context, new_evaluation_context)
-        {right, new_evaluation_context} = propagate_to_pattern(right, evaluation_context, new_evaluation_context)
+        {left, new_evaluation_context} = run_pattern(left, evaluation_context, new_evaluation_context)
+        {right, new_evaluation_context} = run_pattern(right, evaluation_context, new_evaluation_context)
 
         {{left, right}, new_evaluation_context}
   
-      # Literal
-      literal when is_literal(literal) ->
-        {literal, new_evaluation_context}
+      # Literal Variable
+      literal_or_variable when is_literal(literal_or_variable) or is_variable(literal_or_variable) ->
+        {literal_or_variable, new_evaluation_context}
     end
   end
 
@@ -457,13 +522,16 @@ defmodule Tria.Pass.Evaluation do
   end
 
   defp (%{bindings: left_bindings} = left) <~ (%{bindings: right_bindings}) do
-    #TODO optimize this code
-    bindings = Enum.reduce(right_bindings, left_bindings, fn {key, value}, acc ->
-      key = Matchlist.fold(key, acc)
-      value = Matchlist.fold(value, acc)
-      Matchlist.put(acc, key, value)
+    bindings = Map.merge(left_bindings, right_bindings, fn
+      _, v, v -> v
+      _, _, _ -> raise "What the fuck"
     end)
     %{left | bindings: bindings}
+  rescue
+    e ->
+      IO.inspect left_bindings, label: :left
+      IO.inspect right_bindings, label: :right
+      reraise e, __STACKTRACE__
   end
 
   defp precomputable?(_evaluation_context, dot_call(module, _, args) = dc) when is_atom(module) do
@@ -475,10 +543,6 @@ defmodule Tria.Pass.Evaluation do
     end
   end
   defp precomputable?(_evaluation_context, _ast), do: false
-
-  defp unify({varname, meta, _cotnext}) do
-    {varname, meta, gen_uniq_context()}
-  end
 
   ## Hooks
 
@@ -499,35 +563,37 @@ defmodule Tria.Pass.Evaluation do
 
   ## Helpers optimizations
 
-  defp optimize_clauses(args, clauses, evaluation_context) do
+  defp optimize_clauses(args, clauses, evaluation_context, error) do
     clauses
     |> Enum.map(fn {:"->", meta, [left, right]} ->
-      {left, left_evaluation_context} = propagate_to_pattern(left, evaluation_context)
+      {left, left_evaluation_context} = run_pattern(left, evaluation_context)
       {Interpreter.multimatch(left, args), {left, left_evaluation_context, meta, right}}
     end)
     |> filter_clauses()
     |> case do
       [{{:yes, bindings}, {_pattern, left_evaluation_context, _meta, body}}] ->
         hit()
-        evaluation_context =
-          Enum.reduce(bindings, evaluation_context, fn {key, value}, evaluation_context when is_variable(key) ->
-            put_bind(evaluation_context, key, value)
-          end)
+        evaluation_context = put_binds(evaluation_context, bindings)
 
-        {body, _inner_evaluation_context} = do_run(body, evaluation_context <~ left_evaluation_context)
-        body
+        {body, inner_evaluation_context} = run(body, evaluation_context <~ left_evaluation_context)
+        fold(body, inner_evaluation_context.bindings)
 
       [] ->
+        # IO.inspect args, label: :args
+        # IO.inspect (for {_, _, [l | _]} <- clauses, do: l), label: :patterns
+
         hit()
         # Nothing will ever match in this case
         # FIXME proper raise
         IO.warn "This fn will never success"
-        quote(do: raise "Will never match")
+        error.(args)
 
       confidence_and_clauses ->
         clauses =
-          Enum.map(confidence_and_clauses, fn {{_confidence, _bindings}, {left, left_evaluation_context, clause_meta, body}} ->
-            {right, _right_evaluation_context} = do_run(body, evaluation_context <~ left_evaluation_context)
+          Enum.map(confidence_and_clauses, fn {{_confidence, bindings}, {left, left_evaluation_context, clause_meta, body}} ->
+            evaluation_context = put_binds(evaluation_context, bindings)
+            {right, _} = run(body, evaluation_context <~ left_evaluation_context)
+
             case left do
               [{:when, meta, pattern_and_guard}] ->
                 {guard, pattern} = List.pop_at(pattern_and_guard, -1)
@@ -538,7 +604,7 @@ defmodule Tria.Pass.Evaluation do
             end
           end)
 
-        quote do: case(unquote(maybe_tuplify args), do: unquote(clauses))
+        quote do: case(unquote(maybe_tuplify args), do: unquote clauses)
     end
   end
 

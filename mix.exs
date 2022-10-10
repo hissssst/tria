@@ -4,26 +4,27 @@ defmodule Tria.MixProject do
   def project do
     [
       app: :tria,
-      version: "0.1.0",
+      version: "0.0.1",
       elixir: "~> 1.11",
-      start_permanent: Mix.env() == :prod,
+      start_permanent: false,
+      elixirc_paths: elixirc_paths(),
       deps: deps()
     ]
   end
 
-  # Run "mix help compile.app" to learn about applications.
   def application do
-    [
-      extra_applications: [:logger]
-    ]
+    []
   end
 
-  # Run "mix help deps" to learn about dependencies.
+  defp elixirc_paths(env \\ Mix.env)
+  defp elixirc_paths(:test), do: elixirc_paths(:prod) ++ ["test/support"]
+  defp elixirc_paths(_), do: ["lib"]
+
   defp deps do
     [
-      {:ex_doc, "~> 0.23.0", only: :dev, runtime: false},
-      {:dialyxir, "~> 1.0.0", only: :dev, runtime: false},
-      {:credo, "~> 1.1", only: :dev, runtime: false},
+      {:ex_doc,   "~> 0.23.0", only: :dev, runtime: false},
+      {:dialyxir, "~> 1.0.0",  only: :dev, runtime: false},
+      {:credo,    "~> 1.1",    only: :dev, runtime: false},
     ]
   end
 end

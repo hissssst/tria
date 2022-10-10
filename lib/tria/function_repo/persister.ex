@@ -5,6 +5,7 @@ defmodule Tria.FunctionRepo.Persister do
     case start(filetables: %{filename => tablename}) do
       {:ok, _} ->
         {:ok, :started}
+
       {:error, {:already_started, pid}} ->
         GenServer.call(pid, {:add_filetable, filename, tablename})
     end

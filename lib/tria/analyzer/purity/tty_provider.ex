@@ -17,7 +17,7 @@ defmodule Tria.Analyzer.Purity.TTYProvider do
 
   @impl Provider
   def is_pure(mfa, opts \\ []) do
-    GenServer.call(start(), {:is_pure, mfa, opts})
+    GenServer.call(start(), {:is_pure, mfa, opts}, :infinity)
   end
 
   defp start(opts \\ []) do

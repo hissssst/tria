@@ -11,7 +11,7 @@ defmodule Tria.FunctionRepo do
 
   alias Tria.FunctionRepo.Persister
 
-  @persistent_traits ~w[pure]a
+  @persistent_traits ~w[pure pure_cache]a
 
   @typedoc "Traits can be only atoms"
   @type trait :: atom()

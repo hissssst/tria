@@ -8,7 +8,7 @@ defmodule Tria.Tri do
   Therefore it uses `is_elixir_variable` guard and such
 
   #TODO implement store/restore
-  To save the metadata in pattern and restore it in 
+  To save the metadata in pattern and restore it in quote
   """
 
   import Tria.Common
@@ -20,10 +20,12 @@ defmodule Tria.Tri do
   `:debug` - defines label in case you want to inspect the AST (default: `false`)
   `:to_tria` - translates the pattern to Tria (default: `true`)
   `:isolate` - defines that the variables should not be fetches from outer context (default: `false`)
+  `:meta` - whether meta field should be empty in pattern or in AST
   """
   @type option :: {:debug, atom()}
   | {:to_tria, boolean()}
   | {:isolate, boolean()}
+  | {:meta, boolean()}
 
   @doc """
   `quote/unquote` but on steroids
@@ -44,8 +46,8 @@ defmodule Tria.Tri do
 
   When called outside the pattern, this macro takes passed AST and
   transforms it into pattern to match upon. It drops the metadata
-  and allows the usage of `tri` inside `tri` to kinda unquote code
-  It also supports `tri_splicing` which works kinda like `unquote_splicing`
+  and allows the usage of `tri` inside `tri` to kinda unquote code.
+  It also supports `tri_splicing` which works like `unquote_splicing`.
   
   Example:
       iex> x = 1; y = 2
@@ -64,6 +66,7 @@ defmodule Tria.Tri do
   end
 
   defp do_tri(code, opts, env) do
+    opts = opts ++ Module.get_attribute(env.module, :tri_opts, [])
     if Macro.Env.in_match?(env) do
       to_pattern(code, opts, env)
     else
@@ -74,6 +77,16 @@ defmodule Tria.Tri do
         v when v in [nil, false] -> nil
         true -> inspect_ast(x)
         label -> inspect_ast(x, label: label)
+      end
+    end)
+    |> then(fn x ->
+      if Keyword.get(opts, :meta, true) do
+        x
+      else
+        prewalk(x, fn
+          {:"{}", [], [op, _meta, args]} -> {:"{}", [], [op, [], args]}
+          other -> other
+        end)
       end
     end)
   end
@@ -166,7 +179,7 @@ defmodule Tria.Tri do
   defp maybe_unescape_variable(other), do: other
 
   defp maybe_unescape_variable({:{}, _, [n, m, c]} = original, versioned_vars) when is_elixir_variable({n, m, c}) do
-    name_context= {n, c}
+    name_context = {n, c}
     case versioned_vars do
       %{^name_context => _} ->
         {n, m, c}

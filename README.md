@@ -1,87 +1,123 @@
 # Tria
 
-Tria is a subset of `Elixir` language designed specially for easy AST manipulations
+An optimizing compiler for elixir
 
-## Specs
+## Overview
+TODO
 
-### Tria
+## Milestones
 
-Tria anguage differs from Elixir:
-* No aliases, no imports
-* Every call is a `Mod.function`
-* No `&` captures, only `fn`-s
-* Only mfa
-* No macros, (even `|>`)
-* With `with`
-* No `if_undefined: :apply`
-* No counters for variables context
+[x] Compiles my project
+
+[x] Passes tests on some external project correctly
+
+[ ] Passes tests on some big external project correctly
+
+[ ] Passes tests on phoenix
+
+
+
+
+# Roadmap
+
+Project consists of several parts
+
+### Tria language
+
+A special language for manipulating Elixir's AST
+
+No imports, requires, macro
+And varibles can have integer in context field
+
+[x] Tria -> Elixir
+[x] Elixir -> Tria
+[x] ATF -> Tria. Kinda, needs testing
+[ ] Tria -> ATF (actually don't need this, but it can be useful for erlangers)
+
+[x] Tria->SSA, SSA->Tria
+
+### Compiler
+
+`Mix.Task.Compiler`-compatible compiler.
+And ability to inline optimizers
+
+Basic idea is to compile modules into context modules
+This means that modules are divided into groups
+and each group is compiled into separate module
+while original modules delegate the this separate module
+
+[x] `Tria.tria` and `Tria.run` functions and macro
+
+[x] Task interface
+Just prepends `use Tria` to every module
+
+[ ] `use Tria, context: context`
+Needs testing on big projects
+
+### Infrastructure
+
+[x] DB
+
+[x] Purity check providers
+
+[ ] Tria annotations
+
+[ ] Module generation Infrastructure
+I want to create a module and pass functions into it
+when I need it
+
+[ ] Callgraph
+
+### Purity checking
+
+[x] Purity check by xref
+
+[ ] Separate the tables:
+`pure_cache` local cache during compilation
+`pure_roots` nifs and stuff from internal libraries
+
+[ ] Purity for `pure_cache` invalidation
+
+[ ] Purity depending on argument purity
+For example `Enum.map` is pure
+if first argument is a list, and a second is a pure function
+
+
+### Optimization pipeline
+
+Transformations which take an AST and produce an AST.
+Can be called one after another.
+
+[ ] Determine order of optimizers
+
+[ ] Create an ability to plan optimizers,
+so the compilation won't take too much time
 
 ---
 
-### TODO
+[x] Evaluation
+of everything what can be evaluated in compile time
+  [x] evaluation hit
+  [x] pure functions pre-evaluation
 
-[ ] Purity table invalidation based on module hash
+[x] Peephole
+Kinda. Needs testing
+  [x] `Map.get(something, something, default)`
+  [x] `try(do: pure)`
 
-[ ] PGO for inlining. We can always inline functions which are called once
+[ ] Inlining
+  [ ] Size measurement
+  [ ] Call graph analyzing algorithm
 
-[x] Implement `Bindings` as a structure, this will deduplicate
-    a ton of code
+[ ] Bubble
+Moves the call up in the stacktrace
 
-[ ] Implement `fold` function to fold bindings into ast
+[ ] Case lifting
+Joins nested cases into one big case
 
-[ ] Think about handling `when` inside patterns in a different way
-    I already know 5 places where it takes place
+### Enum optimizers
 
-[ ] Infrastructure to enable inter-module inlinings
-    Actually inlinings are already possible
-    We just need to define how, where and in what amount to inline
-
-    And this is a very hard task!
-
-[x] Generate one module from multiple modules
-
-[ ] fn to case translation is incorrect
-    Needs some rethinking because they raise different errors
-    Maybe extra clause?
-
-[T] `Enum` optimizers
-    Needs testing and purity checking
-
-[ ] Purity checking
-    Kinda
-    Needs more proper checking
-
-[T] Erlang abstract format to Tria translator
-    It works but needs testing
-
-[T] Fetch local calls in abstract->elixir->tria translator
-    Needs testing
-
-[x] Get over FUD with `Tria.Matcher`
-
-[x] ex->tria mfa (it's fine to handle this by hand)
-
-[x] ex->tria macro_expansion
-
-[x] ex->tria `&` capture
-    is tricky because of `&function/2` and `&Module.function/2`
-
----
-
-### Optimization passes ideas
-
-[x] Enum.map joining
-
-[x] Enum.map unrolling
+[ ] Join maps
+If they're pure inside
 
 [ ] Moving Enum sequence to generated `defp`
-
-[ ] Fn inlining (almost complete, requires matcher to be finished)
-
-[ ] Map.get and family
-
-[ ] zero-arity pure functions pre-evaluation
-
-### Other ideas
-
-[ ] Investigate NimbleParsec, perhaps this can be optimized with Tria

@@ -16,12 +16,12 @@ defmodule Tria.Analyzer.Purity do
   It replaces all possible impure calls with sends and gathers
   all effects called
   """
-  def run_analyze(ast) do
+  def run_analyze(ast, stack \\ []) do
     {type, result} = 
       ast
       |> postwalk(fn
         dot_call(m, f, a) = mfa ->
-          if lookup {m, f, a} do
+          if lookup({m, f, a}, stack) do
             mfa
           else
             quote do: send(self(), {:effect, unquote Macro.escape mfa})
@@ -73,38 +73,46 @@ defmodule Tria.Analyzer.Purity do
 
   defp lookup({m, f, a} = mfa, stack) when is_atom(m) and is_list(a) do
     mfarity = arityfy mfa
-    if mfarity in stack do
-      # Recursive functions are considered pure
-      true
-    else
-      with nil <- FunctionRepo.lookup(mfarity, :pure) do
-        dotted = {{:".", [], [m, f]}, [], a}
-        case Analyzer.fetch_tria(mfa) do
-          # No function found
-          nil ->
-            pure? = Provider.is_pure(mfa, stack: stack)
-            FunctionRepo.insert(mfa, :pure, pure?)
+    with nil <- do_lookup(mfa, stack) do
+      dotted = {{:".", [], [m, f]}, [], a}
+      case Analyzer.fetch_tria(mfa) do
+        # No function found
+        nil ->
+          pure? = Provider.is_pure(mfa, stack: stack)
+          FunctionRepo.insert(mfa, :pure, pure?)
 
-          # Is a NIF or BIF function
-          {:fn, _, [{:"->", _, [_, dot_call(:erlang, :nif_error, _)]}]} ->
-            pure? = Provider.is_pure(mfa, stack: stack)
-            FunctionRepo.insert(mfa, :pure, pure?)
+        # Is a NIF or BIF function
+        {:fn, _, [{:"->", _, [_, dot_call(:erlang, :nif_error, _)]}]} ->
+          pure? = Provider.is_pure(mfa, stack: stack)
+          FunctionRepo.insert(mfa, :pure, pure?)
 
-          # Is an Elixir bootstrap
-          {:fn, _, [{:"->", _, [_, ^dotted]}]} ->
-            pure? = Provider.is_pure(mfa, stack: stack)
-            FunctionRepo.insert(mfa, :pure, pure?)
+        # Is an Elixir bootstrap
+        {:fn, _, [{:"->", _, [_, ^dotted]}]} ->
+          pure? = Provider.is_pure(mfa, stack: stack)
+          FunctionRepo.insert(mfa, :pure, pure?)
 
-          # Anything else, and for this we don't insert the purity check
-          # TODO maybe move this in cache
-          ast ->
-            res = check_analyze(ast, [mfarity | stack])
-            res
-        end
+        # Anything else, and for this we don't insert the purity check
+        # TODO maybe move this in cache
+        ast ->
+          res = check_analyze(ast, [mfarity | stack])
+          FunctionRepo.insert(mfa, :pure_cache, res)
+          res
       end
     end
   end
-  defp lookup({_, _f, _a}), do: false
+  defp lookup({_m, _f, _a}, _stack), do: false
+
+  defp do_lookup(mfa, stack) do
+    mfarity = arityfy mfa
+    with(
+      # Recursive functions are considered pure
+      false <- mfarity in stack,
+      nil <- FunctionRepo.lookup(mfarity, :pure_cache),
+      nil <- FunctionRepo.lookup(mfarity, :pure)
+    ) do
+      nil
+    end
+  end
 
   defp fetch_effects() do
     receive do

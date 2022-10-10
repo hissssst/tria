@@ -19,7 +19,7 @@ defmodule Tria.Translator.Abstract do
   end
 
   def to_tria(abstract, env \\ __ENV__) do
-    IO.inspect env.module
+    IO.inspect env.module, label: :translating_abstract
     abstract
     |> traverse()
     |> ElixirTranslator.to_tria(env)
@@ -221,15 +221,15 @@ defmodule Tria.Translator.Abstract do
 
       {:call, _anno, func, args} ->
         case traverse(func) do
-          var when is_variable(var) ->
-            quote do: (unquote(var)).(unquote_splicing traverse args)
-
           func when is_atom(func) ->
             if {func, length(args)} in erlang_funcs() do
               dot_call(:erlang, traverse(func), traverse(args))
             else
               {traverse(func), [], traverse(args)}
             end
+
+          other ->
+            quote do: (unquote(other)).(unquote_splicing traverse args)
         end
 
       # Records
@@ -286,6 +286,10 @@ defmodule Tria.Translator.Abstract do
         IO.inspect other
         raise "Not implemented"
     end
+  rescue
+    e ->
+      IO.inspect(abstract, label: :failed_abstract, pretty: true, limit: :infinity)
+      reraise(e, __STACKTRACE__)
   end
 
   defp traverse_block([line]), do: traverse(line)
