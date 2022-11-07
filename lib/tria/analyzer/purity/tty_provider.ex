@@ -1,4 +1,4 @@
-defmodule Tria.Analyzer.Purity.TTYProvider do
+defmodule Tria.Codebase.Purity.TTYProvider do
 
   @moduledoc """
   Purity Provider which reads the purity information from stdin.
@@ -8,7 +8,7 @@ defmodule Tria.Analyzer.Purity.TTYProvider do
 
   import Tria.Common, only: [ast_to_string: 1]
 
-  alias Tria.Analyzer.Purity.Provider
+  alias Tria.Codebase.Purity.Provider
   @behaviour Provider
 
   defguard is_empty(s) when s in [[], nil]

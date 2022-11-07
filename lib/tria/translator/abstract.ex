@@ -11,11 +11,16 @@ defmodule Tria.Translator.Abstract do
   @behaviour Tria.Translator
 
   import Tria.Common
-  alias Tria.Analyzer
+  alias Tria.Codebase
   alias Tria.Translator.Elixir, as: ElixirTranslator
 
   def from_tria(_ast) do
     raise "Not implemented"
+  end
+
+  def to_tria!(abstract, env \\ __ENV__) do
+    {:ok, tria, _} = to_tria(abstract, env)
+    tria
   end
 
   def to_tria(abstract, env \\ __ENV__) do
@@ -40,7 +45,7 @@ defmodule Tria.Translator.Abstract do
       # Specials
       l when is_list(l) ->
         Enum.map(l, &traverse/1)
-        
+
       {nil, _anno} ->
         []
 
@@ -79,7 +84,7 @@ defmodule Tria.Translator.Abstract do
             any -> any
           end
         end
-        
+
       {:block, _anno, block} ->
         {:__block__, [], Enum.map(block, &traverse/1)}
 
@@ -364,7 +369,7 @@ defmodule Tria.Translator.Abstract do
   defp remove_underscore(other), do: other
 
   defp erlang_funcs do
-    MapSet.new Analyzer.fetch_functions :erlang
+    MapSet.new Codebase.fetch_functions :erlang
   end
 
 end

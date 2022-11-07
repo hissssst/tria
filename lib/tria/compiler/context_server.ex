@@ -6,166 +6,202 @@ defmodule Tria.Compiler.ContextServer do
   #TODO implement recompilation of existing module
   """
 
-  alias Tria.Translator.Elixir, as: ElixirTranslator
   use GenServer
-  import Tria.Common, only: [inspect_ast: 2]
+  import Tria.Common
+
+  alias Tria.Translator.Elixir, as: ElixirTranslator
+  alias Tria.Compiler
 
   # Public
 
-  def emit_definition(context, kind, module, name, clauses) do
-    GenServer.call(context, {:new_def, kind, module, name, clauses}, :infinity)
+  def emit_definition(context, definition) do
+    GenServer.call(context, {:add_definition, definition}, :infinity)
   end
 
   def mark_ready(context, module) do
     GenServer.call(context, {:ready, module}, :infinity)
-    Process.sleep(1000)
   end
 
-  def get_pdict() do
-    Process.get() |> Keyword.put(:elixir_compiler_modules, [])
+  def generate(context) do
+    GenServer.call(context, :generate, :infinity)
   end
 
-  def start(name, pdict \\ get_pdict()) do
-    case GenServer.start(__MODULE__, %{name: name, pdict: pdict}, name: name) do
+  def evaluate(context, mfarity, args) do
+    GenServer.call(context, {:evaluate, mfarity, args}, :infinity)
+  end
+
+  def start(name) do
+    case GenServer.start(__MODULE__, %{name: name}, name: name) do
       {:ok, pid} -> pid
       {:error, {:already_started, pid}} -> pid
     end
   end
 
-  def fname(module, name), do: :"#{module}_#{name}"
-  # def fname(_module, name), do: name
-
   # GenServer
 
-  def init(%{name: name, pdict: pdict}) do
-    for {k, v} <- pdict, do: Process.put(k, v)
-    {:ok, %{definitions: %{}, modules: MapSet.new(), name: name, tick: nil}}
+  def init(opts) do
+    state = %{
+      definitions: %{},
+      name: Map.fetch!(opts, :name)
+    }
+
+    {:ok, state}
   end
 
-  def handle_call({:new_def, kind, module, name, clauses}, _from, %{definitions: defs, modules: mods} = state) do
-    defs = Map.put(defs, {module, name}, {kind, clauses})
-    {:reply, :ok, %{state | definitions: defs, modules: MapSet.put(mods, module)}}
-  end
-
-  def handle_call({:ready, module}, _from, %{modules: modules} = state) do
-    modules = MapSet.delete(modules, module)
-    state = tick(state)
-    {:reply, :ok, %{state | modules: modules}}
-  end
-
-  def handle_info(:tick, %{modules: modules} = state) do
-    if MapSet.new() == modules, do: create_module(state)
+  def handle_call({:evaluate, mfarity, args}, from, %{definitions: definitions} = state) do
+    {kind, clauses} = Map.fetch!(definitions, mfarity)
+    spawn fn ->
+      result = do_evaluate(kind, clauses, args)
+      GenServer.reply(from, result)
+    end
     {:noreply, state}
+  end
+
+  def handle_call({:add_definition, {{module, kind, name, arity}, clauses}}, _from, %{definitions: definition} = state) do
+    definition = Map.put(definition, {module, name, arity}, {kind, clauses})
+    {:reply, :ok, %{state | definitions: definition}}
+  end
+
+  def handle_call({:ready, _module}, _from, state) do
+    generate_stub(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call(:generate, _from, state) do
+    modules = generate_context(state)
+    {:reply, modules, state}
   end
 
   # Helpers
 
-  defp tick(%{tick: nil} = state) do
-    %{state | tick: Process.send_after(self(), :tick, 1000)}
-  end
-  defp tick(%{tick: timer} = state) do
-    Process.cancel_timer(timer)
-    tick(%{state | tick: nil})
+  defp do_evaluate(macrokind, clauses, args) when macrokind in ~w[defmacro defmacrop]a do
+    clauses = add_caller(clauses)
+    args = for arg <- args, do: Macro.escape arg
+    do_evaluate(:def, clauses, args)
   end
 
-  defp create_module(%{name: name, definitions: defs}) do
-    funcs = defs_to_funcs(defs)
+  defp do_evaluate(_kind, clauses, args) do
+    quoted = quote do: unquote(Compiler.def_to_fn(clauses)).(unquote_splicing args)
+    Tria.Interpreter.eval!(quoted, [], :infinity)
+  end
+
+  defp generate_stub(%{name: context, definitions: definitions} = state) do
+    funcs =
+      Enum.map(definitions, fn {{module, name, arity}, {kind, _clauses}} ->
+        fname = Compiler.fname(module, name)
+
+        args = for _ <- List.duplicate(nil, arity), do: {:arg, [counter: gen_uniq_context()], Elixir}
+        args =
+          case kind do
+            :defmacro -> [{:caller, [], :tria_caller} | args]
+            _ -> args
+          end
+
+        body = [do: dot_call(__MODULE__, :evaluate, [context, Macro.escape({module, name, arity}), args])]
+        define(:def, fname, args, [], body)
+      end)
+
+    quote do
+      defmodule unquote state.name do
+        unquote_splicing funcs
+      end
+    end
+    # |> inspect_ast(label: :stub)
+    |> Compiler.compile_quoted("#{state.name}.ex")
+  end
+
+  defp generate_context(state) do
+    funcs = definitions_to_funcs(state.definitions)
 
     #FIXME add functions to module, instead of recompiling it every time
-    if :error != :code.get_object_code(name) do
+    unless :code.get_object_code(state.name) == :error do
       IO.warn "The context module already exists"
     end
 
     quote do
-      defmodule unquote(name) do
-        unquote_splicing(funcs)
+      defmodule unquote state.name do
+        unquote_splicing funcs
       end
     end
-    # |> IO.inspect(label: :generated_ast)
-    |> inspect_ast(with_contexts: true, label: :generated)
-    |> Code.compile_quoted("#{name}.ex")
-    |> Enum.each(fn {module, binary} ->
-      :code.load_binary(module, '#{Process.get :elixir_compiler_dest}/#{module}.beam', binary)
+    |> inspect_ast(label: :gen)
+    |> Compiler.compile_quoted("#{state.name}.ex")
+  end
+
+  defp definitions_to_funcs(definitions) do
+    Enum.flat_map(definitions, fn {{module, name, _arity}, {kind, clauses}} ->
+      fname = Compiler.fname(module, name)
+      clauses = run(clauses, definitions)
+      def_to_func(kind, fname, clauses)
     end)
   end
 
-  defp defs_to_funcs(defs) do
-    Enum.flat_map(defs, fn {{module, name}, {_kind, clauses}} ->
-      fname = fname(module, name)
-      clauses = run(clauses)
-      for {args, guards, body} <- clauses do
-        args = ElixirTranslator.from_tria(args)
-        guards = ElixirTranslator.from_tria(guards)
-        body = ElixirTranslator.from_tria(body)
-        case guards do
-          [] ->
-            quote do
-              def(unquote(fname)(unquote_splicing args), unquote(body))
-            end
+  defp def_to_func(kind, fname, clauses) when kind in ~w[defmacro defmacrop]a do
+    clauses = add_caller(clauses)
+    def_to_func(:def, fname, clauses)
+  end
 
-          guards ->
-            guards = Enum.reduce(guards, fn right, left -> {:when, [], [left, right]} end)
-            quote do
-              def(unquote(fname)(unquote_splicing args) when unquote(guards), unquote(body))
-            end
-        end
-      end
+  defp def_to_func(kind, fname, clauses) do
+    Enum.map(clauses, fn {args, guards, body} ->
+      [args, guards, body] = ElixirTranslator.from_tria [args, guards, body]
+      define(kind, fname, args, guards, body)
     end)
   end
 
   # Transforms the `{args, guards, body}` to the `fn`, runs optimizers
   # and transforms the result back to `{args, guards, body}`
+  defp run(clauses, definitions) do
+    clauses
+    |> Compiler.def_to_fn()
+    |> Tria.run(translate: false)
+    |> contextify_local_calls(definitions)
+    |> Compiler.fn_to_def()
+  end
 
-  defp run(clauses) do
-    fn_clauses =
-      Enum.flat_map(clauses, fn {args, guards, body} ->
-        pattern = add_guards(args, guards)
-        quote do
-          unquote_splicing(pattern) -> try(unquote(body))
+  defp contextify_local_calls(ast, definitions) do
+    postwalk(ast, fn
+      dot_call(module, function, args, _, callmeta) = call when is_atom(module) and is_atom(function) ->
+        mfarity = {module, function, length(args)}
+        case definitions do
+          %{^mfarity => _} -> {Compiler.fname(module, function), callmeta, args}
+          _ -> call
         end
-      end)
 
-    thefn = {:fn, [], fn_clauses}
-    {:fn, _, fn_clauses} = Tria.run(thefn, translate: false)
-
-    Enum.map(fn_clauses, fn
-      {:"->", _, [pattern, {:try, _, [body]}]} ->
-        {args, guards} = pop_guards(pattern)
-        {args, guards, body}
-
-      {:"->", _, [pattern, body]} ->
-        {args, guards} = pop_guards(pattern)
-        {args, guards, [do: body]}
+      other ->
+        other
     end)
   end
 
-  # Guards helpers
-
-  defp pop_guards(pattern) do
-    case :lists.reverse(pattern) do
-      [{:when, _, [arg, guards]} | tail] ->
-        {:lists.reverse([arg | tail]), unjoin_guards(guards)}
-
-      _ ->
-        {pattern, []}
+  defp define(kind, fname, args, [], body) do
+    quote do
+      unquote(kind)(unquote(fname)(unquote_splicing args), unquote body)
     end
   end
 
-  defp add_guards(args, []), do: args
-  defp add_guards(args, guards) do
-    List.update_at(args, -1, fn last_arg ->
-      quote do
-        unquote(last_arg) when unquote(join_guards guards)
-      end
+  defp define(kind, fname, args, guards, body) do
+    guard = guards_to_guard(guards)
+    quote do
+      unquote(kind)(unquote(fname)(unquote_splicing args) when unquote(guard), unquote(body))
+    end
+  end
+
+  defp guards_to_guard(guards) do
+    Enum.reduce(guards, fn right, left -> {:when, [], [left, right]} end)
+  end
+
+  defp add_caller(clauses, caller_var \\ {:caller, [], :tria_caller}) do
+    Enum.map(clauses, fn {args, guards, body} ->
+      args = [caller_var | args]
+      body = replace_caller(body, caller_var)
+
+      {args, guards, body}
     end)
   end
 
-  defp join_guards([guard]), do: guard
-  defp join_guards([guard | guards]) do
-    {:when, [], [guard, join_guards(guards)]}
+  defp replace_caller(ast, replacement) do
+    postwalk(ast, fn
+      caller when is_CALLER(caller) -> replacement
+      other -> other
+    end)
   end
-
-  defp unjoin_guards({:when, _, [guard, guards]}), do: [guard | unjoin_guards guards]
-  defp unjoin_guards(guard), do: [guard]
 
 end

@@ -4,7 +4,7 @@ defmodule Tria.Pass.Peephole do
   A list of tiny peephole optimizations implemented as hooks for the Evaluation pass
   """
 
-  alias Tria.Analyzer.Purity
+  alias Tria.Codebase.Purity
   # alias Tria.Interpreter
   # alias Tria.Pass.Evaluation
   # import Evaluation, only: [put_bind: 3, fetch_bind: 2]
@@ -18,9 +18,9 @@ defmodule Tria.Pass.Peephole do
         if no_raise_throw?(body), do: body, else: ast
 
       # Map get with nil default
-      tri case(Map.get(map, key), do: clauses) ->
-        quoted = quote do: case(Map.get(unquote(map), unquote(key), nil), do: unquote(clauses))
-        after_hook(quoted, bindings)
+      # tri case(Map.get(map, key), do: clauses) ->
+      #   quoted = tri(case Map.get(map, key, nil), do: clauses)
+      #   after_hook(quoted, bindings)
 
       # Map get with default
       tri(
@@ -46,13 +46,14 @@ defmodule Tria.Pass.Peephole do
                 {quote(do: unquote(other) = unquote(variable)), variable}
             end
 
-          quote do
-            case unquote map do
-              %{unquote pin key => unquote pattern} when unquote(variable) != unquote(default) ->
-                unquote other_body
+
+          tri do
+            case map do
+              %{tri pin key => pattern} when variable != default ->
+                other_body
 
               %{} ->
-                unquote default_body
+                default_body
 
               term ->
                 raise BadMapError, term: term
@@ -87,7 +88,7 @@ defmodule Tria.Pass.Peephole do
 
   # TODO think about rewriting this to be more percise
   defp no_raise_throw?(ast) do
-    is_fn(ast) or Macro.quoted_literal?(ast) or Purity.check_analyze(ast)
+    is_fn(ast) or Macro.quoted_literal?(ast)
   end
   
 end

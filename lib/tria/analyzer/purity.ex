@@ -1,4 +1,4 @@
-defmodule Tria.Analyzer.Purity do
+defmodule Tria.Codebase.Purity do
 
   @moduledoc """
   Module which analyzes AST for Purity
@@ -8,8 +8,8 @@ defmodule Tria.Analyzer.Purity do
   import Tria.Tri
 
   alias Tria.Interpreter
-  alias Tria.{Analyzer, FunctionRepo}
-  alias Tria.Analyzer.Purity.Provider
+  alias Tria.{Codebase, FunctionRepo}
+  alias Tria.Codebase.Purity.Provider
 
   @doc """
   Runs valid code and checks if any of effect functions is called.
@@ -75,7 +75,7 @@ defmodule Tria.Analyzer.Purity do
     mfarity = arityfy mfa
     with nil <- do_lookup(mfa, stack) do
       dotted = {{:".", [], [m, f]}, [], a}
-      case Analyzer.fetch_tria(mfa) do
+      case Codebase.fetch_tria(mfa) do
         # No function found
         nil ->
           pure? = Provider.is_pure(mfa, stack: stack)
@@ -96,7 +96,6 @@ defmodule Tria.Analyzer.Purity do
         ast ->
           res = check_analyze(ast, [mfarity | stack])
           FunctionRepo.insert(mfa, :pure_cache, res)
-          res
       end
     end
   end

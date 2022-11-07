@@ -24,9 +24,10 @@ defmodule Tria.Pass.Evaluation do
   ```
   """
 
+  import Tria.Breakpoint
   import Tria.Common
   import Tria.Tri
-  alias Tria.Analyzer.Purity
+  alias Tria.Codebase.Purity
   alias Tria.Interpreter
   alias Tria.Matchlist
   alias Tria.Translator.SSA
@@ -53,7 +54,7 @@ defmodule Tria.Pass.Evaluation do
     run_once(ast, struct!(__MODULE__, evaluation_context))
   end
   def run_once(ast, evaluation_context) do
-    inspect_ast(ast, label: :running_over, with_contexts: true)
+    # inspect_ast(ast, label: :running_over, with_contexts: true)
     {code, _evaluation_context} = run(ast, evaluation_context)
     case Process.delete(:hit) do
       true ->
@@ -126,6 +127,10 @@ defmodule Tria.Pass.Evaluation do
   defp run(code, evaluation_context) do
     {code, evaluation_context} = run_hook(code, evaluation_context, :before)
     case code do
+      # Breakpoint
+      breakpoint(point) ->
+        handle_breakpoint(point)
+
       # Block
       {:__block__, meta, block} ->
         {lines, new_evaluation_context} =
@@ -507,7 +512,7 @@ defmodule Tria.Pass.Evaluation do
         {right, new_evaluation_context} = run_pattern(right, evaluation_context, new_evaluation_context)
 
         {{left, right}, new_evaluation_context}
-  
+
       # Literal Variable
       literal_or_variable when is_literal(literal_or_variable) or is_variable(literal_or_variable) ->
         {literal_or_variable, new_evaluation_context}

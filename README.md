@@ -1,6 +1,13 @@
 # Tria
 
+!!! Think about replacing `defmodule` and `def` to my own macro
+It is easy to replace them
+Hard part is to be compatible with compilation hooks, attributes and stuff
+
 An optimizing compiler for elixir
+
+## Known problems
+Phoenix router compilation fails because of improper list somewhere
 
 ## Overview
 TODO
@@ -14,8 +21,6 @@ TODO
 [ ] Passes tests on some big external project correctly
 
 [ ] Passes tests on phoenix
-
-
 
 
 # Roadmap
@@ -114,6 +119,9 @@ Moves the call up in the stacktrace
 
 [ ] Case lifting
 Joins nested cases into one big case
+
+[ ] map.field
+Optimize this to unpack map in one place
 
 ### Enum optimizers
 

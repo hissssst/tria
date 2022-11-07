@@ -24,12 +24,18 @@ defmodule Tria.Interpreter do
   | {:exit, any()}
   | {:thrown, any()}
 
+  @doc """
+  Evaluates quoted code in a separate isolated process and returns result or raises
+  """
   @spec eval!(Tria.t(), Matchlist.t(), timeout()) :: any()
   def eval!(quoted, matchlist \\ Matchlist.empty(), timeout \\ 5000) do
     {:ok, {result, _matchlist}} = eval(quoted, matchlist, timeout)
     result
   end
 
+  @doc """
+  Evaluates quoted code in a separate isolated process and returns whatever the code returns
+  """
   @spec eval(Tria.t(), Matchlist.t(), timeout()) :: eval_result()
   def eval(quoted, matchlist \\ Matchlist.empty(), timeout \\ 5000) do
     # It's neccessary to run this function in a cleanest enviroment possible
@@ -52,6 +58,9 @@ defmodule Tria.Interpreter do
     end
   end
 
+  @doc """
+  Evaluates quoted code in the caller's process and returns whatever the code returns
+  """
   @spec eval_local(Tria.t(), Matchlist.t()) :: eval_result()
   def eval_local(quoted, matchlist \\ Matchlist.empty()) do
     # We manually attach matchlist before the code

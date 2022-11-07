@@ -3,7 +3,7 @@ defmodule Tria.Tri do
   @moduledoc """
   Module for famous `tri/2` macro. This macro is used mostly for testing the optimized code
 
-  Development notice:  
+  Development notice:
   tri/2 macro works with Elixir's AST (because it is a Macro and Tria is written in Elixir)
   Therefore it uses `is_elixir_variable` guard and such
 
@@ -38,7 +38,7 @@ defmodule Tria.Tri do
   transforms it into pattern to match upon. It drops the metadata
   and allows the usage of `tri` inside `tri` to kinda unquote code
   It also supports `tri_splicing` which works kinda like `unquote_splicing`
-  
+
   Example:
       iex> tri(x + y) = quote do: 1 + 2
       iex> x == 1 and y == 2
@@ -48,7 +48,7 @@ defmodule Tria.Tri do
   transforms it into pattern to match upon. It drops the metadata
   and allows the usage of `tri` inside `tri` to kinda unquote code.
   It also supports `tri_splicing` which works like `unquote_splicing`.
-  
+
   Example:
       iex> x = 1; y = 2
       iex> tri(x + y)
@@ -66,7 +66,7 @@ defmodule Tria.Tri do
   end
 
   defp do_tri(code, opts, env) do
-    opts = opts ++ Module.get_attribute(env.module, :tri_opts, [])
+    opts = get_defaults(opts, env)
     if Macro.Env.in_match?(env) do
       to_pattern(code, opts, env)
     else
@@ -77,16 +77,6 @@ defmodule Tria.Tri do
         v when v in [nil, false] -> nil
         true -> inspect_ast(x)
         label -> inspect_ast(x, label: label)
-      end
-    end)
-    |> then(fn x ->
-      if Keyword.get(opts, :meta, true) do
-        x
-      else
-        prewalk(x, fn
-          {:"{}", [], [op, _meta, args]} -> {:"{}", [], [op, [], args]}
-          other -> other
-        end)
       end
     end)
   end
@@ -114,6 +104,16 @@ defmodule Tria.Tri do
         Macro.prewalk(x, & maybe_unescape_variable(&1, versioned_vars))
       else
         x
+      end
+    end)
+    |> then(fn x ->
+      if Keyword.get(opts, :meta, true) do
+        x
+      else
+        prewalk(x, fn
+          {:"{}", [], [op, _meta, args]} -> {:"{}", [], [op, [], args]}
+          other -> other
+        end)
       end
     end)
   end
@@ -170,7 +170,7 @@ defmodule Tria.Tri do
     Macro.expand({traverse_in_tri(n, env), [], traverse_in_tri(a, env)}, env)
   end
   defp traverse_in_tri(other, _env), do: other
-  
+
   ## Unescapes variables
 
   defp maybe_unescape_variable({:{}, _, [n, m, c]}) when is_elixir_variable({n, m, c}) do
@@ -194,6 +194,11 @@ defmodule Tria.Tri do
 
   defp metavar do
     {:_, [], nil}
+  end
+
+  defp get_defaults(opts, %Macro.Env{module: nil}), do: opts
+  defp get_defaults(opts, %Macro.Env{module: module}) do
+    opts ++ Module.get_attribute(module, :tri_opts, [])
   end
 
 end

@@ -2,6 +2,7 @@ defmodule Tria.Translator.SSATest do
   use ExUnit.Case
 
   import Tria.Tri
+  import Tria.Common, only: [inspect_ast: 2], warn: false
   alias Tria.Translator.SSA
 
   import Tria.TestHelpers
@@ -154,6 +155,7 @@ defmodule Tria.Translator.SSATest do
           <<x :: binary-size(x), x :: binary-size(1)>> = s
         end
         |> SSA.from_tria()
+        |> inspect_ast(label: :result, with_contexts: true)
 
       assert_tri code do
         x1 = 1
@@ -162,6 +164,22 @@ defmodule Tria.Translator.SSATest do
       end
 
       assert 4 == length Enum.uniq [x1, x2, s, something]
+    end
+
+    test "Defined and than used" do
+      code =
+        tri do
+          x = 0
+          <<x :: 8, y :: binary-size(x)>> = <<1, 2>>
+        end
+        |> SSA.from_tria()
+
+      assert_tri code do
+        x1 = 0
+        <<x2 :: 8, y :: binary-size(x2)>> = <<1, 2>>
+      end
+
+      assert 3 == length Enum.uniq [y, x1, x2]
     end
   end
 end

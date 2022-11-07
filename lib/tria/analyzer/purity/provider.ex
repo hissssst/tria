@@ -1,4 +1,4 @@
-defmodule Tria.Analyzer.Purity.Provider do
+defmodule Tria.Codebase.Purity.Provider do
 
   @moduledoc """
   Sometimes Purity analyzer is unable to find the definition for the function.
@@ -6,7 +6,7 @@ defmodule Tria.Analyzer.Purity.Provider do
   about the function. This is the behaviour to do this
   """
 
-  alias Tria.Analyzer.Purity.TTYProvider
+  alias Tria.Codebase.Purity.TTYProvider
 
   @type opts :: Keyword.t()
 

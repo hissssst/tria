@@ -4,17 +4,35 @@ defmodule Tria.Common do
   Like `Macro`, but for Tria. Contains useful guards, macro and functions
   """
 
-  @special_forms ~w[
-    % %{} & .  :: <<>> = ^ __CALLER__ __DIR__ __ENV__ __MODULE__
-    __STACKTRACE__ __aliases__ __block__ {} alias case cond fn
-    for import quote receive require super try unquote unquote_splicing with
-  ]a
+  # These special forms are variables, but they can be assigned to, only used
+  @special_vars ~w[__CALLER__ __DIR__ __ENV__ __MODULE__ __STACKTRACE__]a
+
+  # These are special forms which can be valid variable names
+  # @special_forms_valid ~w[
+  #   alias case cond for import quote receive
+  #   super try unquote unquote_splicing with
+  # ]a
+
+  # These are special forms and things that are not allowed to be a variable name
+  @special_forms_invalid ~w[% %{} & .  :: <<>> = ^ __aliases__ __block__ {} fn]a
+
+  # Plus reserved words which are not special forms
+  @reserved_words ~w[rescue after catch do when end]a
 
   # Guards
 
+  # Helper for zero-based tuple indexing
   defmacrop element(tuple, index) when is_integer(index) do
     quote do: :erlang.element(unquote(index + 1), unquote(tuple))
   end
+
+  @doc """
+  Checks if atom is reserved and can't be used as a variable or function name
+  """
+  defguard is_reserved(name)
+           when name in @reserved_words or
+                name in @special_forms_invalid or
+                name in @special_vars
 
   @doc """
   Checks if given term is Tria context
@@ -26,7 +44,9 @@ defmodule Tria.Common do
   """
   defguard is_variable(name, meta, context)
            when is_atom(name) and
-                  name not in @special_forms and
+                  name not in @special_forms_invalid and
+                  name not in @reserved_words and
+                  name not in @special_vars and
                   is_list(meta) and
                   is_context(context)
 
@@ -39,13 +59,35 @@ defmodule Tria.Common do
                   is_variable(element(t, 0), element(t, 1), element(t, 2))
 
   @doc """
+  Checks if given AST is a special Elixir variable
+  """
+  defguard is_special_variable(t)
+           when is_tuple(t) and
+                  tuple_size(t) == 3 and
+                  is_atom(element(t, 0)) and
+                  element(t, 0) in @special_vars and
+                  is_list(element(t, 1)) and
+                  is_atom(element(t, 2))
+
+  @doc """
+  Checks is AST is `__CALLER__`
+  """
+  defguard is_CALLER(t)
+           when is_tuple(t) and
+                  tuple_size(t) == 3 and
+                  element(t, 0) == :__CALLER__ and
+                  is_list(element(t, 1)) and
+                  is_atom(element(t, 2))
+
+  @doc """
   Checks if given AST is an Elixir variable (with integer in context field)
   """
   defguard is_elixir_variable(t)
            when is_tuple(t) and
                   tuple_size(t) == 3 and
                   is_atom(element(t, 0)) and
-                  element(t, 0) not in @special_forms and
+                  element(t, 0) not in @special_forms_invalid and
+                  element(t, 0) not in @special_vars and
                   is_list(element(t, 1)) and
                   is_atom(element(t, 2))
 
@@ -94,6 +136,15 @@ defmodule Tria.Common do
                   is_list(element(t, 1)) and
                   is_list(element(t, 2))
 
+  @doc """
+  Checks if triple is a module, function, arity
+  """
+  defguard is_mfarity(module, function, arity) when is_atom(module) and is_atom(function) and is_integer(arity) and arity >= 0
+
+  @doc """
+  Checks if triple is a module, function, arity
+  """
+  defguard is_mfarity(mfarity) when is_tuple(mfarity) and tuple_size(mfarity) == 3 and is_mfarity(element(mfarity, 0), element(mfarity, 1), element(mfarity, 2))
 
   @doc """
   Checks if passed AST is a literal (this means a value which represents itself in the AST)
@@ -125,6 +176,8 @@ defmodule Tria.Common do
   """
   @spec ast_to_string(Tria.t(), Keyword.t()) :: String.t()
   def ast_to_string(ast, opts \\ []) do
+    highlight_line = Keyword.get(opts, :highlight_line, :no_highlight)
+
     unformatted =
       if Keyword.get(opts, :with_contexts, false) do
         Macro.prewalk(ast, fn
@@ -134,19 +187,26 @@ defmodule Tria.Common do
           {:_, meta, _} = v when is_variable(v) ->
             {:_, meta, nil}
 
-          {name, meta, nil} ->
-            {:"#{name}_nil", meta, nil}
-
           {name, meta, ctx} = v when is_variable(v) ->
-            {:"#{name}_#{ctx}", meta, nil}
+            ctx_str = ctx && to_string(ctx) || "nil"
+            case meta[:counter] do
+              {ctx, counter} ->
+                {:"#{name}_#{ctx_str}_#{ctx}_#{counter}", meta, nil}
+
+              nil ->
+                {:"#{name}_#{ctx_str}", meta, nil}
+
+              counter ->
+                {:"#{name}_#{ctx_str}_#{counter}", meta, nil}
+            end
 
           other ->
             other
         end)
       else
         Macro.prewalk(ast, fn
-          {name, meta, context} when is_integer(context) ->
-            {name, meta, nil}
+          {name, _, context} when is_integer(context) ->
+            {name, [], nil}
 
           other ->
             other
@@ -156,6 +216,17 @@ defmodule Tria.Common do
       |> Macro.prewalk(fn
         {{:".", _, [:erlang, :binary_to_atom]}, _, [{:"<<>>", _, items}, :utf8]} ->
           {{:".", [], [:erlang, :binary_to_atom]}, [], [{:"<<>>", [], items}, :utf1488]}
+
+        other ->
+          other
+      end)
+      |> Macro.postwalk(fn
+        {_op, meta, _ctx} = x ->
+          if meta[:line] == highlight_line do
+            {:"HERE_HITS!", [], [x]}
+          else
+            x
+          end
 
         other ->
           other
@@ -172,6 +243,12 @@ defmodule Tria.Common do
   @doc """
   Like IO.inspect/1 but for Elixir's AST
   Supports `label` option
+
+  ## Options
+
+  - `:with_contexts` - display contexts next to variables
+  - `:label` - inspect with label
+  - `:highlight_line` - highline line
   """
   @spec inspect_ast(ast :: Tria.t(), Keyword.t()) :: Macro.t()
   def inspect_ast(ast, opts \\ []) do
@@ -204,7 +281,7 @@ defmodule Tria.Common do
   @doc """
   Public macro for MFA call AST like `Module.function(arg1, arg2, arg3)`
   """
-  defmacro dot_call(module, function, args) do
+  defmacro dot_call(module, function, args, dotmeta \\ {:_, [], Elixir}, callmeta \\ {:_, [], Elixir}) do
     module =
       case module do
         {:__aliases__, _, _} = aliased ->
@@ -215,7 +292,7 @@ defmodule Tria.Common do
       end
 
     if Macro.Env.in_match?(__CALLER__) do
-      quote do: {{:., _, [unquote(module), unquote(function)]}, _, unquote(args)}
+      quote do: {{:., unquote(dotmeta), [unquote(module), unquote(function)]}, unquote(callmeta), unquote(args)}
     else
       quote do: {{:., [], [unquote(module), unquote(function)]}, [], unquote(args)}
     end
@@ -314,7 +391,9 @@ defmodule Tria.Common do
   Checks if given AST is a special form
   """
   def is_special_form({:when, _meta, _args}), do: true
-  def is_special_form({name, _meta, args}) when name in @special_forms do
+  def is_special_form({name, _, _}) when name in @special_forms_invalid, do: true
+  def is_special_form({name, _, _}) when name in @reserved_words, do: true
+  def is_special_form({name, _meta, args}) when is_atom(name) do
     Macro.special_form?(name, length(args))
   end
   def is_special_form(_), do: false
