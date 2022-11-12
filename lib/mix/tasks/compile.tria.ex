@@ -2,11 +2,17 @@ defmodule Mix.Tasks.Compile.Tria do
   use Mix.Task.Compiler
 
   alias Tria.Compiler
+  alias Tria.Tracer
 
   def run(_args) do
     unless String.downcase(System.get_env("TRIA_DEBUG", "")) in ["", "0", "false", "no"] do
       :observer.start()
     end
+
+    Tracer.trace [
+      {Mix.Phoenix.Context, :__struct__, 0},
+      {Mix.Phoenix.Context, :__struct__, 1},
+    ]
 
     Mix.Project.get!() # Just to make sure that project exists
     mix_config = Mix.Project.config()
@@ -33,22 +39,16 @@ defmodule Mix.Tasks.Compile.Tria do
 
   # Basically the whole compilation pipeline
   defp compile(elixirc_paths, build_path) do
-    elixirc_paths
-    |> find_all_files()
-    |> Enum.map(fn step -> Compiler.to_quoted(step) end)
-    |> Enum.map(fn step -> Compiler.start_compilation(step) end)
-    |> Enum.map(fn step -> Compiler.finish_compilation(step) end)
-    |> Enum.map(fn {modules, %{context: context}} ->
-      write_to_disk(modules, build_path)
-      context
-    end)
-    |> Enum.uniq()
-    |> Enum.flat_map(fn context -> Compiler.generate_context(context) end)
-    |> write_to_disk(build_path)
+    compiled =
+      elixirc_paths
+      |> find_all_files()
+      |> Compiler.compile(build_path: build_path, context: TriaGlobalContext)
+
+    write_to_disk(compiled, build_path)
   end
 
-  defp write_to_disk(pairs, build_path) do
-    Enum.each(pairs, fn {module, binary} ->
+  defp write_to_disk(modules, build_path) do
+    Enum.each(modules, fn {module, binary} ->
       Compiler.save(build_path, module, binary)
     end)
   end

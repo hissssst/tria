@@ -11,23 +11,30 @@ defmodule Tria.Compiler.ContextServer do
 
   alias Tria.Translator.Elixir, as: ElixirTranslator
   alias Tria.Compiler
+  alias Tria.Tracer
 
   # Public
 
+  defp call(context, msg) do
+    context
+    |> start()
+    |> GenServer.call(msg, :infinity)
+  end
+
   def emit_definition(context, definition) do
-    GenServer.call(context, {:add_definition, definition}, :infinity)
+    call(context, {:add_definition, definition})
   end
 
   def mark_ready(context, module) do
-    GenServer.call(context, {:ready, module}, :infinity)
+    call(context, {:ready, module})
   end
 
   def generate(context) do
-    GenServer.call(context, :generate, :infinity)
+    call(context, :generate)
   end
 
   def evaluate(context, mfarity, args) do
-    GenServer.call(context, {:evaluate, mfarity, args}, :infinity)
+    call(context, {:evaluate, mfarity, args})
   end
 
   def start(name) do
@@ -63,6 +70,8 @@ defmodule Tria.Compiler.ContextServer do
   end
 
   def handle_call({:ready, _module}, _from, state) do
+    # We generate stub every time the module is ready,
+    # because __struct__ behaves this way
     generate_stub(state)
     {:reply, :ok, state}
   end
@@ -87,15 +96,15 @@ defmodule Tria.Compiler.ContextServer do
 
   defp generate_stub(%{name: context, definitions: definitions} = state) do
     funcs =
-      Enum.map(definitions, fn {{module, name, arity}, {kind, _clauses}} ->
+      Enum.map(definitions, fn {{module, name, arity}, {_kind, _clauses}} ->
         fname = Compiler.fname(module, name)
-
         args = for _ <- List.duplicate(nil, arity), do: {:arg, [counter: gen_uniq_context()], Elixir}
-        args =
-          case kind do
-            :defmacro -> [{:caller, [], :tria_caller} | args]
-            _ -> args
-          end
+
+        # args =
+        #   case kind do
+        #     :defmacro -> [{:caller, [], :tria_caller} | args]
+        #     _ -> args
+        #   end
 
         body = [do: dot_call(__MODULE__, :evaluate, [context, Macro.escape({module, name, arity}), args])]
         define(:def, fname, args, [], body)
@@ -123,24 +132,31 @@ defmodule Tria.Compiler.ContextServer do
         unquote_splicing funcs
       end
     end
-    |> inspect_ast(label: :gen)
+    |> inspect_ast(label: :g, with_contexts: true)
     |> Compiler.compile_quoted("#{state.name}.ex")
   end
 
   defp definitions_to_funcs(definitions) do
-    Enum.flat_map(definitions, fn {{module, name, _arity}, {kind, clauses}} ->
+    Enum.flat_map(definitions, fn {{module, name, arity}, {kind, clauses}} ->
+      Tracer.tag_ast(clauses, {module, name, arity}, label: :pregenerating, with_contexts: true)
+
       fname = Compiler.fname(module, name)
-      clauses = run(clauses, definitions)
-      def_to_func(kind, fname, clauses)
+
+      clauses =
+        clauses
+        |> run(definitions)
+        |> Tracer.tag_ast({module, name, arity}, label: :generating, with_contexts: true)
+
+      create_definition(kind, fname, clauses)
     end)
   end
 
-  defp def_to_func(kind, fname, clauses) when kind in ~w[defmacro defmacrop]a do
-    clauses = add_caller(clauses)
-    def_to_func(:def, fname, clauses)
+  defp create_definition(kind, fname, clauses) when kind in ~w[defmacro defmacrop]a do
+    # clauses = add_caller(clauses)
+    create_definition(:def, fname, clauses)
   end
 
-  defp def_to_func(kind, fname, clauses) do
+  defp create_definition(kind, fname, clauses) do
     Enum.map(clauses, fn {args, guards, body} ->
       [args, guards, body] = ElixirTranslator.from_tria [args, guards, body]
       define(kind, fname, args, guards, body)
@@ -178,14 +194,10 @@ defmodule Tria.Compiler.ContextServer do
   end
 
   defp define(kind, fname, args, guards, body) do
-    guard = guards_to_guard(guards)
+    guard = Compiler.join_guards(guards)
     quote do
       unquote(kind)(unquote(fname)(unquote_splicing args) when unquote(guard), unquote(body))
     end
-  end
-
-  defp guards_to_guard(guards) do
-    Enum.reduce(guards, fn right, left -> {:when, [], [left, right]} end)
   end
 
   defp add_caller(clauses, caller_var \\ {:caller, [], :tria_caller}) do

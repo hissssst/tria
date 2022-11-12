@@ -65,6 +65,8 @@ defmodule Tria.Translator.Elixir do
   end
 
   defp expand_all(ast, env) do
+    # IO.inspect(env.context, label: :context)
+    # IO.inspect(ast, label: :ast)
     case Macro.expand(ast, env) do
       # Imports, aliases, requires and other stuff which changes env
       {:__aliases__, _, _} = aliased ->
@@ -294,10 +296,12 @@ defmodule Tria.Translator.Elixir do
         end
 
       # When
-      {:when, meta, [pattern, guards]} ->
-        {pattern, _env} = expand_all(pattern, %Macro.Env{env | context: :match})
-        {guards, _env} = expand_all(guards, %Macro.Env{env | context: :guard})
-        {{:when, meta, [pattern, guards]}, env}
+      {:when, meta, [left, right]} ->
+        # left_context = env.context && :guard || :match
+        # {left, _env} = expand_all(left, %Macro.Env{env | context: left_context})
+        {left, _env}  = expand_all(left,  env)
+        {right, _env} = expand_all(right, env)
+        {{:when, meta, [left, right]}, env}
 
       # Calls
       dot_call(subject, function, args) ->
@@ -397,7 +401,7 @@ defmodule Tria.Translator.Elixir do
     end
   rescue
     e ->
-      inspect_ast(ast, label: :failed, with_contexts: true)
+      inspect_ast(ast, label: :failed_to_translate, with_contexts: true)
       reraise e, __STACKTRACE__
   end
 
@@ -630,8 +634,8 @@ defmodule Tria.Translator.Elixir do
 
   defp expand_clause_args([{:when, meta, args_and_guards}], env) do
     {guards, args} = List.pop_at(args_and_guards, -1)
-    {guards, _internal_env} = expand_all(guards, %Macro.Env{env | context: :guard})
     {args,   _internal_env} = expand_all(args,   %Macro.Env{env | context: :match})
+    {guards, _internal_env} = expand_all(guards, %Macro.Env{env | context: :guard})
     [{:when, meta, args ++ [guards]}]
   end
   defp expand_clause_args(args, env) do

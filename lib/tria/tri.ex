@@ -130,12 +130,8 @@ defmodule Tria.Tri do
   ## and unescapes code
 
   ### Tri helpers
-  defp traverse({:{}, _, [
-    func,
-    _,
-    [{:{}, _, [:tri_splicing, _, [list]]}]
-  ]}, env) do
-    {:{}, [], [traverse(func, env), metavar(), traverse(list, env)]}
+  defp traverse([{:{}, _, [:tri_splicing, _, [list]]}], env) do
+    traverse_in_tri(list, env)
   end
 
   defp traverse({:{}, _, [:tri, _, [literal]]}, env) do
@@ -146,8 +142,18 @@ defmodule Tria.Tri do
   end
 
   ### Arbitary escaped AST
-  defp traverse(escaped, env) when is_list(escaped) do
-    Enum.map(escaped, &traverse(&1, env))
+  defp traverse([head | tail], env) do
+    head = traverse(head, env)
+    tail = traverse(tail, env)
+
+    # This case is not necessary, but readability counts here
+    case tail do
+      tail when is_list(tail) ->
+        [head | tail]
+
+      _ ->
+        [{:|, [], [head, tail]}]
+    end
   end
   defp traverse({l, r}, env) do
     {traverse(l, env), traverse(r, env)}

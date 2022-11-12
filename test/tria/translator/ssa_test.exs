@@ -9,6 +9,25 @@ defmodule Tria.Translator.SSATest do
 
   @tri_opts meta: false
 
+  describe "Regression" do
+    test "fn clause map match" do
+      code =
+        tri do
+          x = 1
+          fn %{old_x: ^x, x: x = _} when :erlang.is_atom(x) -> x end
+        end
+        |> SSA.from_tria()
+        |> inspect_ast(label: :result, with_contexts: true)
+
+      assert_tri code do
+        x1 = 1
+        fn %{old_x: ^x, x: x2 = underscore} when :erlang.is_atom(x2) -> x2 end
+      end
+
+      assert 3 == length Enum.uniq [underscore, x1, x2]
+    end
+  end
+
   describe "Basics" do
     test "variable renaming" do
       code =

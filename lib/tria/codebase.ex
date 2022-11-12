@@ -16,28 +16,36 @@ defmodule Tria.Codebase do
   @doc """
   Fetches chunks from BEAM object code
   """
-  def fetch_chunks(module, chunks \\ ~w[abstract_code locals exports]a) do
-    with(
-      {^module, bin, _filename} <- :code.get_object_code(module),
-      {:ok, {^module, chunks}} <- :beam_lib.chunks(bin, chunks)
-    ) do
-      {:ok, chunks}
-    else
-      :error ->
-        :error
-
-      error ->
-        {:error, error}
+  def fetch_chunks(module, chunks \\ ~w[abstract_code locals exports]a)
+  def fetch_chunks(module, chunks) when is_atom(module) do
+    with {^module, bin, _filename} <- :code.get_object_code(module) do
+      fetch_chunks(bin, chunks)
+    end
+  end
+  def fetch_chunks(bin, chunks) when is_binary(bin) do
+    case :beam_lib.chunks(bin, chunks) do
+      {:ok, {_module, chunks}} -> {:ok, chunks}
+      {:error, :beam_lib, error} -> {:error, error}
     end
   end
 
   @doc """
   Fetches single chunk from BEAM object code
   """
-  def fetch_chunk(module, chunk_name) do
-    case fetch_chunks(module, [chunk_name]) do
-      {:ok, [{^chunk_name, chunk}]} ->
-        {:ok, chunk}
+  def fetch_chunk(module_or_binary, chunk_name) do
+    case fetch_chunks(module_or_binary, [chunk_name]) do
+      {:ok, [{^chunk_name, chunk}]} -> {:ok, chunk}
+      _ -> :error
+    end
+  end
+
+  @doc """
+  Fetches abstract code from BEAM object code
+  """
+  def fetch_abstract_code(module_or_binary) do
+    case fetch_chunk(module_or_binary, :abstract_code) do
+      {:ok, {:raw_abstract_v1, abstract_code}} ->
+        {:ok, :erl_expand_records.module(abstract_code, [])}
 
       _ ->
         :error
@@ -45,15 +53,18 @@ defmodule Tria.Codebase do
   end
 
   @doc """
-  Fetches abstract code from BEAM object code
+  Fetches attribute value from BEAM's abstract code
   """
-  def fetch_abstract_code(module) do
-    case fetch_chunk(module, :abstract_code) do
-      {:ok, {:raw_abstract_v1, abstract_code}} ->
-        {:ok, :erl_expand_records.module(abstract_code, [])}
-
-      _ ->
-        :error
+  @spec fetch_attribute(list() | module() | binary(), atom()) :: {:ok, any()} | :error
+  def fetch_attribute(abstract_code, name) when is_list(abstract_code) do
+    Enum.find_value(abstract_code, :error, fn
+      {:attribute, _, ^name, value} -> {:ok, value}
+      _ -> false
+    end)
+  end
+  def fetch_attribute(module_or_binary, name) do
+    with {:ok, ac} <- fetch_abstract_code(module_or_binary) do
+      fetch_attribute(ac, name)
     end
   end
 
