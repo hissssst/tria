@@ -1,26 +1,36 @@
 defmodule Tria.Translator.SSA do
 
   @moduledoc """
-  SSA form is a subset of Tria language
+  SSA form is a subset of Tria language.
   """
 
   @behaviour Tria.Translator
 
   import Tria.Common
 
+  defstruct [
+    pin_known: false,
+    translations: %{}
+  ]
+
   # Public
 
+  @doc """
+  Because Tria.SSA is a subset of Tria
+  no translation is required
+  """
   def to_tria(ast, _opts \\ []) do
     ast
   end
 
-  def from_tria(ast) do
-    {ssa_form_ast, _} = run(ast, %{})
+  @doc """
+  Because Tria.SSA is a subset of Tria
+  no translation is required
+  """
+  def from_tria(ast, opts \\ []) do
+    state = %__MODULE__{pin_known: Keyword.get(opts, :pin_known, false)}
+    {ssa_form_ast, _} = run(ast, state)
     ssa_form_ast
-  # rescue
-  #   e ->
-  #     inspect_ast(ast, label: :failed_during_ssa_translation)
-  #     reraise e, __STACKTRACE__
   end
 
   # Main recursive function
@@ -42,6 +52,17 @@ defmodule Tria.Translator.SSA do
         {arg, translations} = run(arg, translations)
         clauses = run_clauses(clauses, translations)
         { {:case, meta, [arg, [{:do, clauses}]]}, translations }
+
+      # Receive
+      {:receive, meta, [[do: clauses]]} ->
+        clauses = run_clauses(clauses, translations)
+        { {:receive, meta, [[do: clauses]]}, translations }
+
+      {:receive, meta, [[do: clauses, after: [{:"->", after_meta, [[left], right]}]]]} ->
+        clauses = run_clauses(clauses, translations)
+        {left, left_translations} = run(left, translations)
+        {right, _} = run(right, left_translations)
+        { {:receive, meta, [[do: clauses, after: [{:"->", after_meta, [[left], right]}]]]}, translations }
 
       # Cond
       {:cond, meta, [[do: clauses]]} ->
@@ -170,15 +191,15 @@ defmodule Tria.Translator.SSA do
         { {:., dotmeta, dot}, dot_translations }
 
       # Variable
-      var when is_variable(var) ->
-        case fetch_translation(translations, var) do
-          {:ok, value} ->
-            {value, translations}
+      {_, meta, _} = variable when is_variable(variable) ->
+        case fetch_translation(translations, variable) do
+          {:ok, replacement} ->
+            {with_meta(replacement, meta), translations}
 
           :error ->
-            # It appears that the variable is undefined
+            # It appears that the variableiable is undefined
             # And we just leave it be
-            {var, translations}
+            {variable, translations}
         end
 
       # Calls and forms
@@ -221,7 +242,7 @@ defmodule Tria.Translator.SSA do
 
   ## Propagating to pattern
 
-  def propagate_to_pattern(code, translations, new_translations \\ %{}) do
+  def propagate_to_pattern(code, translations, new_translations \\ %__MODULE__{}) do
     case code do
       # Binary matching is special because pinning is not required for variables in types
       {:"<<>>", meta, items} ->
@@ -253,26 +274,40 @@ defmodule Tria.Translator.SSA do
         {{:when, meta, patterns ++ [guard]}, pattern_translations}
 
       # Pin . We handle pin separately before variables
-      {:^, meta, [variable]} = pinned when is_variable(variable) ->
+      pin(variable, meta) = pinned when is_variable(variable) ->
         case fetch_translation(translations, variable) do
           :error ->
             {pinned, new_translations}
 
           {:ok, val} ->
-            {{:^, meta, [val]}, new_translations}
+            {pin(val, meta), new_translations}
         end
 
       # Variable
-      variable when is_variable(variable) ->
-        case fetch_translation(new_translations, variable) do
-          :error ->
-            # It appears that it is the new variable
-            new_variable = unify(variable)
-            {new_variable, put_translation(new_translations, variable, new_variable)}
+      {:_, _, _} = underscore when is_variable(underscore) ->
+        {underscore, new_translations}
 
-          {:ok, variable} ->
-            # It appears that the variable is present multiple times in the pattern
-            {variable, new_translations}
+      {_, meta, _} = variable when is_variable(variable) ->
+        {new_variable, new_new_translations} =
+          case fetch_translation(new_translations, variable) do
+            :error ->
+              # It appears that it is the new variable
+              new_variable = unify(variable)
+              {new_variable, put_translation(new_translations, variable, new_variable)}
+
+            {:ok, variable} ->
+              # It appears that the variable is present multiple times in the pattern
+              {with_meta(variable, meta), new_translations}
+          end
+
+        key = unmeta variable
+        case translations do
+          %__MODULE__{pin_known: true, translations: %{^key => value}} ->
+            pinned = pin with_meta(value, meta)
+            {pinned, new_translations}
+
+          _ ->
+            {new_variable, new_new_translations}
         end
 
       # Map or Tuple or Binary or matchable operator <>
@@ -301,26 +336,26 @@ defmodule Tria.Translator.SSA do
 
   ## Helpers for working with translations
 
-  defp merge_translationss([]), do: %{}
+  defp merge_translationss([]), do: %__MODULE__{}
   defp merge_translationss(translationss) when is_list(translationss) do
     Enum.reduce(translationss, fn right, left -> left <~ right end)
   end
 
-  defp left <~ right do
-    Map.merge(left, right)
+  defp %__MODULE__{pin_known: lpin, translations: left} <~ %__MODULE__{pin_known: rpin, translations: right} do
+    %__MODULE__{translations: Map.merge(left, right), pin_known: lpin or rpin}
   end
 
-  defp put_translation(translations, key, value) do
+  defp put_translation(%{translations: translations} = state, key, value) do
     key = unmeta key
     value = unmeta value
-    Map.put(translations, key, value)
+    %{state | translations: Map.put(translations, key, value)}
   end
 
-  defp fetch_translation(translations, key) do
+  defp fetch_translation(%{translations: translations} = state, key) do
     key = unmeta key
     case translations do
       %{^key => value} ->
-        with :error <- fetch_translation(translations, value) do
+        with :error <- fetch_translation(state, value) do
           {:ok, value}
         end
 
@@ -329,12 +364,12 @@ defmodule Tria.Translator.SSA do
     end
   end
 
+  ## Helpers for variables
+
   defp unify({varname, meta, _context}) do
     {varname, meta, gen_uniq_context()}
   end
 
-  defp unmeta({name, meta, context}) when is_variable(name, meta, context) do
-    {name, [], context}
-  end
+  defp with_meta({name, _, context}, meta), do: {name, meta, context}
 
 end

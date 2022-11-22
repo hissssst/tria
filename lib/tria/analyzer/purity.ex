@@ -17,7 +17,7 @@ defmodule Tria.Codebase.Purity do
   all effects called
   """
   def run_analyze(ast, stack \\ []) do
-    {type, result} = 
+    {type, result} =
       ast
       |> postwalk(fn
         dot_call(m, f, a) = mfa ->
@@ -49,7 +49,9 @@ defmodule Tria.Codebase.Purity do
   @doc """
   Checks if effect calls are present in ast
   """
-  def check_analyze(ast, stack \\ []) do
+  def check_analyze(ast, stack \\ [])
+  def check_analyze(dot_call(_, :__impl__, [:target]), _), do: true
+  def check_analyze(ast, stack) do
     prewalk(ast, [], fn
       dot_call(m, f, a), acc ->
         mfa = {unalias(m), f, a}
@@ -119,5 +121,5 @@ defmodule Tria.Codebase.Purity do
       after 0 -> []
     end
   end
-  
+
 end

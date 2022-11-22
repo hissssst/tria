@@ -1,5 +1,9 @@
 defmodule Tria.Compiler do
 
+  @moduledoc """
+  Interface for compiling Elixir mix projects.
+  """
+
   defp env(module, file) do
     %Macro.Env{__ENV__ |
       context: nil,
@@ -20,7 +24,7 @@ defmodule Tria.Compiler do
   @type name :: atom()
 
   @typedoc """
-  Universal signature of a function
+  Universal signature of a function. That is a `module.kind_function/arity`
   """
   @type signature :: {module(), kind(), name(), arity()}
 
@@ -30,20 +34,36 @@ defmodule Tria.Compiler do
   @type clause :: {args :: [Tria.t()], guards :: [Tria.t()], body :: Tria.t()}
 
   @typedoc """
-  One definition
+  One definition. That is a `module.kind_function/arity do clauses`
   """
   @type definition :: {signature(), clauses :: [clause()]}
 
-  @moduledoc """
-  Helpers for compiling Elixir modules
+  @typedoc """
+  `fn` ast in tria or elixir language
   """
+  @type the_fn :: {:fn, list(), [Tria.t() | Macro.t()]}
 
   import Tria.Common
+  alias Tria.Codebase
   alias Tria.Compiler.ContextServer
   alias Tria.Tracer
+  alias Tria.Translator.Abstract
 
   # Project compilation pipeline
 
+  @typedoc """
+  Options for compiling Elixir project
+
+  - `:context` -- (required) tria context module to compile given paths to
+  - `:build_path` -- (required) the path which will be used to store the .beam files
+  """
+  @type compile_option :: {:context, module()}
+  | {:build_path, Path.type(:absolute)}
+
+  @doc """
+
+  """
+  @spec compile([Path.type(:absolute)], [compile_option()] | map()) :: [{module(), binary()}]
   def compile(paths, opts) when is_list(opts), do: compile(paths, Map.new(opts))
   def compile(paths, %{build_path: build_path, context: context} = opts) do
     caller = self()
@@ -73,48 +93,69 @@ defmodule Tria.Compiler do
     end
   end
 
-  def recompile_from_beam(module, binary, %{context: context, file: file}) do
-    alias Tria.Codebase
-    alias Tria.Translator.Abstract
+  @typedoc """
+  Options which used upon recompilation existing beam file.
+  It uses the same options as `compile/2` but with one extra option:
 
+  - `:file` -- (required) filename of the module
+  """
+  @type recompile_option :: compile_option() | {:file, binary()}
+
+  @spec recompile_from_beam(module(), binary(), [recompile_option()] | map()) :: {module(), binary()}
+  def recompile_from_beam(module, binary, opts) when is_list(opts) do
+    recompile_from_beam(module, binary, Map.new(opts))
+  end
+  def recompile_from_beam(module, binary, %{context: context, file: file}) do
     {:ok, ac} = Codebase.fetch_abstract_code(binary)
     {:ok, public} = Codebase.fetch_attribute(ac, :export)
 
     locals =
-      for {:function, _anno, name, arity, _clauses} when name != :__info__ <- ac do
+      for {:function, _anno, name, arity, _clauses} <- ac do
         {name, arity}
       end
 
-    attributes = attributes_from_abstract(ac)
+    {specs, types, callbacks} = attributes_from_abstract(ac)
     docs = fetch_docs(binary)
 
     delegations =
-      for {:function, _anno, name, arity, clauses} when name != :__info__ <- ac do
+      for {_anno, name, arity, clauses} <- functions(ac) do
         {kind, arity} = kind_of(name, arity, public)
         name = unmacro_name(name)
 
         signature = {module, kind, name, arity}
         fn_clauses =
-          clauses
-          |> Tracer.tag({module, name, arity}, label: :abstract)
-          |> Abstract.to_tria!(env(module, file))
-          |> remotify_local_calls(module, locals)
+          Tracer.with_local_trace(signature, fn ->
+            clauses
+            |> Tracer.tag(label: :abstract)
+            |> Abstract.to_tria!(env: env(module, file), locals: locals)
+            |> remotify_local_calls(module, locals)
+            |> put_file(file)
+            |> Tracer.tag(label: :after_translation)
+          end)
 
-        clauses = fn_to_def(fn_clauses)
+        clauses = fn_to_clauses(fn_clauses)
         definition = {signature, clauses}
         ContextServer.emit_definition(context, definition)
 
         doc = Map.get(docs, {name, arity})
-        delegate(context, signature, doc)
+        spec = Map.get(specs, {name, arity})
+        delegate(context, definition, doc: doc, spec: spec)
       end
 
     ContextServer.mark_ready(context, module)
-    body = {:__block__, [], attributes ++ delegations}
-    |> inspect_ast(label: module)
+    body = {:__block__, [], delegations}
+    body = prepend_attrs(body, callbacks ++ types)
 
-    [{_, binary}] = Code.compile_quoted({:defmodule, [], [module, [do: body]]}, file)
+    [{^module, binary}] = Code.compile_quoted({:defmodule, [], [module, [do: body]]}, file)
     {module, binary}
   end
+
+  defp functions([{:function, _, :__info__, 1, _} | tail]), do: functions(tail)
+  defp functions([{:function, anno, name, arity, clauses} | tail]) do
+    [{anno, name, arity, clauses} | functions(tail)]
+  end
+  defp functions([_ | tail]), do: functions(tail)
+  defp functions([]), do: []
 
   defp fetch_docs(binary) do
     {:ok, doc} = Tria.Codebase.fetch_chunk(binary, 'Docs')
@@ -124,25 +165,29 @@ defmodule Tria.Compiler do
     end
   end
 
-  defp attributes_from_abstract([{:attribute, _, _, {{:__info__, _}, _}} | tail]) do
-    attributes_from_abstract tail
+  # TODO separate specs for private functions from other attributes
+  # and remove private functions from delegations to avoid a ton of warnings
+  defp attributes_from_abstract(abstract_code) do
+    Enum.reduce(abstract_code, {%{}, [], []}, fn
+      {:attribute, _, s, {{:__info__, 1}, _}}, acc when s in ~w[spec callback]a ->
+        acc
+
+      {:attribute, _, :spec, {{name, arity}, [spec]}}, {specs, types, callbacks} ->
+        quoted = Code.Typespec.spec_to_quoted(name, spec)
+        {Map.put(specs, {name, arity}, quoted), types, callbacks}
+
+      {:attribute, _, :callback, {{name, _arity}, [spec]}}, {specs, types, callbacks} ->
+        quoted = Code.Typespec.spec_to_quoted(name, spec)
+        {specs, types, [{:callback, quoted} | callbacks]}
+
+      {:attribute, _, :type, type}, {specs, types, callbacks} ->
+        quoted = Code.Typespec.type_to_quoted(type)
+        {specs, [{:type, quoted} | types], callbacks}
+
+      _, acc ->
+        acc
+    end)
   end
-  defp attributes_from_abstract(
-    [{:attribute, _anno, spec_or_callback, {{name, _}, [spec]}} | tail]
-  ) when spec_or_callback in ~w[spec callback]a do
-    quoted = Code.Typespec.spec_to_quoted(name, spec)
-    attribute = {:"@", [import: Kernel], [{spec_or_callback, [], [quoted]}]}
-    [attribute | attributes_from_abstract(tail)]
-  end
-  defp attributes_from_abstract([{:attribute, _anno, :type, value} | tail]) do
-    quoted = Code.Typespec.type_to_quoted(value)
-    attribute = {:"@", [import: Kernel], [{:type, [], [quoted]}]}
-    [attribute | attributes_from_abstract(tail)]
-  end
-  defp attributes_from_abstract([_ | tail]) do
-    attributes_from_abstract(tail)
-  end
-  defp attributes_from_abstract([]), do: []
 
   defp remotify_local_calls(ast, module, locals) do
     postwalk(ast, fn
@@ -171,41 +216,48 @@ defmodule Tria.Compiler do
   Like `Code.compile_quoted/2` but with error descriptions
   """
   def compile_quoted(quoted, file \\ "nofile") do
-    try do
-      Code.compile_quoted(quoted, file)
-    rescue
-      _ ->
-        lined =
-          postwalk(quoted, fn ast ->
-            Macro.update_meta(ast, &Keyword.put(&1, :line, :erlang.unique_integer([:positive])))
-          end)
+    Code.compile_quoted(quoted, file)
+  rescue
+    CompileError ->
+      stacktrace = __STACKTRACE__
 
-        try do
-          Code.compile_quoted(lined, file)
-        rescue
-          e in CompileError ->
-            inspect_ast(lined, label: :failed_to_compile, with_contexts: true, highlight_line: e.line)
-            reraise e, __STACKTRACE__
-        end
-    end
+      lined =
+        postwalk(quoted, fn ast ->
+          Macro.update_meta(ast, &Keyword.put(&1, :line, :erlang.unique_integer([:positive])))
+        end)
+
+      try do
+        Code.compile_quoted(lined, file)
+      rescue
+        e in CompileError ->
+          inspect_ast(lined, label: :failed_to_compile, with_contexts: true, highlight_line: e.line)
+          reraise e, stacktrace
+      end
   end
 
   @doc """
   Converts module, name to the name in the context module
   """
-  def fname(module, name) do
+  def fname({module, kind, name, _arity}) do
+    kind_name =
+      case kind do
+        :defmacro -> "macro_#{name}"
+        _ -> "#{name}"
+      end
+
     module
     |> Module.split()
     |> Enum.map(&snake/1)
-    |> Kernel.++([to_string name])
+    |> Kernel.++([kind_name])
     |> Enum.join("_")
     |> String.to_atom()
   end
 
   @doc """
-  Converts `def`'s `{args, guards, body}` clause or clauses to fn
+  Converts list of clauses to fn
   """
-  def def_to_fn(clauses) when is_list(clauses) do
+  @spec clauses_to_fn([clause()]) :: the_fn()
+  def clauses_to_fn(clauses) when is_list(clauses) do
     fn_clauses =
       Enum.flat_map(clauses, fn {args, guards, body} ->
         args = add_guards(args, guards)
@@ -222,18 +274,19 @@ defmodule Tria.Compiler do
 
     {:fn, [], fn_clauses}
   end
-  def def_to_fn(args, guards, body) do
-    def_to_fn [{args, guards, body}]
+  def clauses_to_fn(args, guards, body) do
+    clauses_to_fn [{args, guards, body}]
   end
 
   @doc """
   Converts fn to `def`'s `{args, guards, body}` clause or clauses
   """
-  def fn_to_def({:fn, _, fn_clauses}) do
-    fn_to_def(fn_clauses)
+  @spec fn_to_clauses(the_fn()) :: [clause()]
+  def fn_to_clauses({:fn, _, fn_clauses}) do
+    fn_to_clauses(fn_clauses)
   end
 
-  def fn_to_def(fn_clauses) when is_list(fn_clauses) do
+  def fn_to_clauses(fn_clauses) when is_list(fn_clauses) do
     Enum.map(fn_clauses, fn
       {:"->", _, [args, {:try, _, [body]}]} ->
         {guards, args} = pop_guards(args)
@@ -243,6 +296,24 @@ defmodule Tria.Compiler do
         {guards, args} = pop_guards(args)
         {args, guards, [do: body]}
     end)
+  end
+
+  # Sorry for this silly name
+  def define_definition({{_module, kind, name, _arity}, clauses}) do
+    import Tria.Translator.Elixir, only: [from_tria: 1]
+
+    defs =
+      clauses
+      |> Enum.map(fn {args, guards, body} -> {from_tria(args), from_tria(guards), from_tria(body)} end)
+      |> Enum.map(fn
+        {args, [], body} ->
+          quote do: unquote(kind)(unquote(name)(unquote_splicing args), unquote(body))
+
+        {args, guards, body} ->
+          quote do: unquote(kind)(unquote(name)(unquote_splicing args) when unquote(join_guards guards), unquote(body))
+      end)
+
+    {:__block__, [], defs}
   end
 
   # Helpers
@@ -296,35 +367,62 @@ defmodule Tria.Compiler do
     end
   end
 
-  defp delegate(tria_context, {module, kind, name, arity}, doc) when kind in ~w[defmacro defmacrop]a do
+  # Struct is special because it is required for every
+  defp delegate(_, {{_, private, _, _}, _}, _) when private in ~w[defp defmacrop]a, do: nil
+  defp delegate(_, {{_module, :def, :__struct__, arity}, _} = definition, attrs) when arity in 0..2 do
+    definition
+    |> define_definition()
+    |> prepend_attrs(attrs)
+  end
+  defp delegate(tria_context, {{module, :defmacro, name, arity} = signature, _clauses}, attrs) do
     args = Macro.generate_unique_arguments(arity, nil)
     callargs = [{:__CALLER__, [], nil} | args]
-    fname = fname(module, name)
-
+    fname = fname(signature)
 
     quote do
-      unquote(kind)(unquote(name)(unquote_splicing args), do: unquote(tria_context).unquote(fname)(unquote_splicing callargs))
+      defmacro(unquote(name)(unquote_splicing args), do: unquote(tria_context).unquote(fname)(unquote_splicing callargs))
     end
-    |> maybe_add_doc(doc)
-    |> Tracer.tag_ast({module, name, arity}, label: :delegated)
+    |> prepend_attrs(attrs)
+    |> Tracer.tag_ast(key: {module, name, arity}, label: :delegated)
   end
-  defp delegate(tria_context, {module, kind, name, arity}, doc) do
+  defp delegate(tria_context, {{module, kind, name, arity} = signature, _}, attrs) do
     args = Macro.generate_unique_arguments(arity, nil)
-    fname = fname(module, name)
+    fname = fname(signature)
 
     quote do
       unquote(kind)(unquote(name)(unquote_splicing args), do: unquote(tria_context).unquote(fname)(unquote_splicing args))
     end
-    |> maybe_add_doc(doc)
-    |> Tracer.tag_ast({module, name, arity}, label: :delegated)
+    |> prepend_attrs(attrs)
+    |> Tracer.tag_ast(key: {module, name, arity}, label: :delegated)
   end
 
-  defp maybe_add_doc(quoted, nil), do: quoted
-  defp maybe_add_doc(quoted, doc) do
+  defp prepend_attrs(quoted, []), do: quoted
+  defp prepend_attrs(quoted, [{_name, nil} | tail]) do
+    prepend_attrs(quoted, tail)
+  end
+  defp prepend_attrs({:__block__, _, lines}, [{name, value} | tail]) do
     quote do
-      unquote doc && quote(do: @doc unquote(doc))
+      @(unquote(name)(unquote(value)))
+      unquote_splicing lines
+    end
+    |> prepend_attrs(tail)
+  end
+  defp prepend_attrs(quoted, [{name, value} | tail]) do
+    quote do
+      @(unquote(name)(unquote(value)))
       unquote quoted
     end
+    |> prepend_attrs(tail)
+  end
+
+  defp put_file(ast, file) do
+    prewalk(ast, fn
+      {left, meta, right} ->
+        {left, Keyword.put_new(meta, :file, file), right}
+
+      other ->
+        other
+    end)
   end
 
 end

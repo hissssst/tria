@@ -40,11 +40,12 @@ defmodule Tria do
   This macro applies optimizer to the passed body.
   Use it with caution, because it can fuck up the context
   """
-  defmacro tria(do: body), do: run(body, translate: true, env: __CALLER__)
-  defmacro tria(body), do: run(body, translate: true, env: __CALLER__)
+  defmacro tria(opts \\ [], do_body)
+  defmacro tria(opts, do: body), do: run(body, opts ++ [translate: true, env: __CALLER__])
+  defmacro tria(opts, body), do: run(body, opts ++ [translate: true, env: __CALLER__])
 
   @doc """
-  This same as `tria/1` macro, but as a function
+  This same as `tria/1` macro, but as a function.
   """
   @spec run(Macro.t(), Keyword.t()) :: Macro.t()
   def run(quoted, opts \\ [])
@@ -65,7 +66,7 @@ defmodule Tria do
       quoted
       # |> inspect_ast(label: :after_translation, with_contexts: true)
       |> Tria.Translator.SSA.from_tria()
-      # |> run_while()
+      |> run_while()
       # |> inspect_ast(label: :result, with_contexts: true)
 
     if translate do

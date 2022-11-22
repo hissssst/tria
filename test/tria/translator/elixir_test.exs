@@ -3,7 +3,7 @@ defmodule Tria.Translator.ElixirTest do
 
   import Tria.Tri
   import Tria.TestHelpers
-  import Tria.Common, only: [inspect_ast: 2]
+  import Tria.Common, only: [inspect_ast: 2], warn: false
   alias Tria.Translator.Elixir, as: ElixirTranslator
 
   defmodule Example do
@@ -418,9 +418,11 @@ defmodule Tria.Translator.ElixirTest do
       quote do
         __ENV__
       end
-      |> IO.inspect(label: :ast)
       |> ElixirTranslator.to_tria!(__ENV__)
-      |> inspect_ast(label: :result)
+      |> assert_tri do
+        # TODO think of better assertion
+        %{tri_splicing _}
+      end
     end
   end
 

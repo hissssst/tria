@@ -2,7 +2,7 @@ defmodule Tria.Pass.EvaluationTest do
   use ExUnit.Case
 
   import Tria.Tri
-  import Tria.Common
+  import Tria.Common, only: [inspect_ast: 2], warn: false
   alias Tria.Pass.Evaluation
   alias Tria.Translator.SSA
 
@@ -461,7 +461,6 @@ defmodule Tria.Pass.EvaluationTest do
           x + x + y
         end
         |> run_while()
-        |> inspect_ast(label: :result, with_contexts: true)
 
       assert_tri evaluated do
         y = Kernel.+(x, x)
@@ -750,7 +749,6 @@ defmodule Tria.Pass.EvaluationTest do
         end).(input, fn x -> {:ok, x} end)
       end
       |> run_while()
-      |> inspect_ast(label: :result)
 
     assert_tri evaluated do
       case input do
@@ -765,6 +763,29 @@ defmodule Tria.Pass.EvaluationTest do
 
         _ ->
           :error
+      end
+    end
+  end
+
+  describe "Structure" do
+    defmodule S do
+      defstruct [x: 1]
+    end
+
+    test "Defined variable remains present" do
+      tri do
+        underscore_5063 = tri(S).__struct__()
+
+        {underscore_5095, underscore_5127} =
+          Enum.split_with(underscore_5031, fn {underscore_5159, _} ->
+            :maps.is_key(underscore_5159, underscore_5063)
+          end)
+      end
+      |> run_while()
+      |> inspect_ast(label: :result)
+      |> assert_tri do
+        _
+        _
       end
     end
   end

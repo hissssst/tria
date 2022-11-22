@@ -2,22 +2,32 @@ defmodule Mix.Tasks.Compile.Tria do
   use Mix.Task.Compiler
 
   alias Tria.Compiler
-  alias Tria.Tracer
+  alias Tria.Tracer, warn: false
 
   def run(_args) do
-    unless String.downcase(System.get_env("TRIA_DEBUG", "")) in ["", "0", "false", "no"] do
-      :observer.start()
-    end
-
-    Tracer.trace [
-      {Mix.Phoenix.Context, :__struct__, 0},
-      {Mix.Phoenix.Context, :__struct__, 1},
-    ]
-
     Mix.Project.get!() # Just to make sure that project exists
     mix_config = Mix.Project.config()
     Mix.Project.ensure_structure(mix_config)
     # manifest_path = Mix.Project.manifest_path(mix_config)
+
+    [
+      {Plug.Test, :delete_req_cookie, 0},
+      {Plug.Test, :delete_req_cookie, 1},
+      {Plug.Test, :delete_req_cookie, 2},
+      {Plug.Test, :delete_req_cookie, 3},
+      {Plug.Test, :delete_req_cookie, 4},
+      {Defbug, :exception, 1},
+      # {Defbug, :f, 1},
+      # {Bandit.Clock, :date_header, 0},
+      # {Bandit.Clock, :start_link, 1},
+      # {Bandit.Clock, :init, 0},
+      # {Bandit.Clock, :run, 0},
+      # {Bandit.Clock, :get_date_header, 0},
+      # {Bandit.Clock, :update_header, 0},
+      # {Plug.Parsers.RequestTooLargeError, :exception, 1},
+      # {Plug.Application, :start, 2},
+    ]
+    |> Enum.map(&Tracer.trace(&1, only: [:before_passes, :generating]))
 
     root = Path.dirname Mix.Project.project_file()
 
@@ -29,7 +39,8 @@ defmodule Mix.Tasks.Compile.Tria do
     build_path = Path.join [
       Mix.Project.build_path(mix_config),
       "lib",
-      to_string(mix_config[:project])
+      to_string(mix_config[:project] || mix_config[:app]),
+      "ebin"
     ]
 
     File.mkdir_p!(build_path)

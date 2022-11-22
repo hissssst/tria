@@ -1,8 +1,18 @@
 defmodule Tria.Codebase do
 
+  @moduledoc """
+  Module with wrappers around beam_lib and code modules
+  which is used to fetch ast in abstract format and other
+  module information
+  """
+
   # We explicitly define this function first in the module
-  # to avoid
-  defp empty_env(module) do
+  # to avoid garbage in enviroment
+  @doc """
+  Returns empty enviroment for given module
+  """
+  @spec empty_env(module() | nil) :: Macro.Env.t()
+  def empty_env(module \\ nil) do
     %Macro.Env{__ENV__ | module: module, file: "nofile", line: 0, versioned_vars: %{}, function: nil}
   end
 
@@ -11,11 +21,18 @@ defmodule Tria.Codebase do
   alias Tria.FunctionRepo
   alias Tria.Translator.Abstract, as: AbstractTranslator
 
+  @typedoc "Name for a chunk in beam lib"
+  @type chunk :: atom() | charlist()
+
+  @typedoc "Module.function/arity or list of arguments"
+  @type mfargs :: {module(), atom(), arity() | [Tria.t()]}
+
   # BEAM chunks
 
   @doc """
   Fetches chunks from BEAM object code
   """
+  @spec fetch_chunks(module() | binary(), [chunk()]) :: {:ok, [{chunk(), any()}]} | {:error, reason :: any()}
   def fetch_chunks(module, chunks \\ ~w[abstract_code locals exports]a)
   def fetch_chunks(module, chunks) when is_atom(module) do
     with {^module, bin, _filename} <- :code.get_object_code(module) do
@@ -32,6 +49,7 @@ defmodule Tria.Codebase do
   @doc """
   Fetches single chunk from BEAM object code
   """
+  @spec fetch_chunk(module() | binary(), chunk()) :: {:ok, any()} | {:error, reason :: any()}
   def fetch_chunk(module_or_binary, chunk_name) do
     case fetch_chunks(module_or_binary, [chunk_name]) do
       {:ok, [{^chunk_name, chunk}]} -> {:ok, chunk}
@@ -42,6 +60,7 @@ defmodule Tria.Codebase do
   @doc """
   Fetches abstract code from BEAM object code
   """
+  @spec fetch_abstract_code(module() | binary()) :: {:ok, :compile.forms()} | {:error, reason :: any()}
   def fetch_abstract_code(module_or_binary) do
     case fetch_chunk(module_or_binary, :abstract_code) do
       {:ok, {:raw_abstract_v1, abstract_code}} ->
@@ -70,6 +89,10 @@ defmodule Tria.Codebase do
 
   # Tria tables
 
+  @doc """
+  Wrapper to fetch `tria` code for mfa
+  """
+  @spec fetch_tria(mfargs()) :: Tria.t() | nil
   def fetch_tria(mfa) do
     {module, _name, _arity} = arityfy mfa
     with nil <- FunctionRepo.lookup(mfa, :tria) do
@@ -90,6 +113,11 @@ defmodule Tria.Codebase do
       reraise e, __STACKTRACE__
   end
 
+  @doc """
+  Fetches abstract_code for mfa but also performs caching of already
+  request abstract_codes
+  """
+  @spec fetch_abstract(mfargs()) :: :compile.forms() | nil
   # Guarded because I want to raise ASAP
   def fetch_abstract({module, _, _} = mfa) when is_atom(module) do
     with nil <- FunctionRepo.lookup(mfa, :abstract) do
@@ -98,18 +126,10 @@ defmodule Tria.Codebase do
     end
   end
 
-  def fetch_abstract_from_db(mfa) do
-    FunctionRepo.lookup(mfa, :abstract)
-  end
-
-  defp prefetch_clauses(module) do
-    with {:ok, ac} <- fetch_abstract_code(module) do
-      for {:function, _anno, name, arity, clauses} <- ac do
-        FunctionRepo.insert({module, name, arity}, :abstract, clauses)
-      end
-    end
-  end
-
+  @doc """
+  Returns a list of functions from abstract_code for passed `module`
+  """
+  @spec fetch_functions(module()) :: [{atom(), arity()}]
   def fetch_functions(module) do
     prefetch_clauses(module)
 
@@ -118,6 +138,12 @@ defmodule Tria.Codebase do
     |> Enum.map(fn {{_, f, a}, _} -> {f, a} end)
   end
 
+  ### Functions for debugging
+
+  @doc """
+  Inspects given Module.function
+  """
+  @spec inspect_fn(module() | binary(), atom()) :: :ok
   def inspect_fn(module, name) when is_atom(module) do
     {^module, bin, _filename} = :code.get_object_code(module)
     inspect_fn(bin, name)
@@ -125,12 +151,16 @@ defmodule Tria.Codebase do
   def inspect_fn(object_code, name) when is_binary(object_code) do
     {:ok, {_, [{_, {_, ac}}]}} = :beam_lib.chunks(object_code, [:abstract_code])
     for {:function, _, ^name, _, clauses} <- ac do
-      inspect_ast {:fn, [], AbstractTranslator.to_tria!(clauses, __ENV__)}
+      inspect_ast({:fn, [], AbstractTranslator.to_tria!(clauses, __ENV__)}, with_contexts: true)
     end
 
     :ok
   end
 
+  @doc """
+  Inspects given `module`
+  """
+  @spec inspect_fn(module() | binary()) :: :ok
   def inspect_fn(module) when is_atom(module) do
     {^module, bin, _filename} = :code.get_object_code(module)
     inspect_fn(bin)
@@ -138,10 +168,26 @@ defmodule Tria.Codebase do
   def inspect_fn(object_code) when is_binary(object_code) do
     {:ok, {_, [{_, {_, ac}}]}} = :beam_lib.chunks(object_code, [:abstract_code])
     for {:function, _, name, _, clauses} <- ac do
-      inspect_ast {:fn, [], AbstractTranslator.to_tria!(clauses, __ENV__)}, label: name
+      inspect_ast({:fn, [], AbstractTranslator.to_tria!(clauses, __ENV__)}, with_contexts: true, label: name)
     end
 
     :ok
+  end
+
+  ### Helpers
+
+  # Fetches straight from the cache
+  defp fetch_abstract_from_db(mfa) do
+    FunctionRepo.lookup(mfa, :abstract)
+  end
+
+  # Warms up the cache
+  defp prefetch_clauses(module) do
+    with {:ok, ac} <- fetch_abstract_code(module) do
+      for {:function, _anno, name, arity, clauses} <- ac do
+        FunctionRepo.insert({module, name, arity}, :abstract, clauses)
+      end
+    end
   end
 
 end

@@ -31,9 +31,11 @@ defmodule Tria.Pass.Evaluation do
   alias Tria.Interpreter
   alias Tria.Matchlist
   alias Tria.Translator.SSA
+  alias Tria.Tracer
 
   defstruct [
-    bindings: %{}, # Maps current bindings is context
+    bindings: %{}, # variable => value_ast in current context
+    context: nil,
     hooks: %{}
   ]
 
@@ -71,8 +73,10 @@ defmodule Tria.Pass.Evaluation do
 
   # Bindings helpers
 
+  # We do not return any binds in guard
+  def fetch_bind(%{context: :guard}, _key), do: :error
   def fetch_bind(%{bindings: bindings}, key) do
-    Map.fetch(bindings, key)
+    Map.fetch(bindings, unmeta key)
   end
 
   def put_bind(%{bindings: bindings} = evaluation_context, key, value) do
@@ -99,10 +103,6 @@ defmodule Tria.Pass.Evaluation do
     end
   end
 
-  def unmeta(something) do
-    prewalk(something, &Macro.update_meta(&1, fn _ -> [] end))
-  end
-
   def fold(value, bindings) do
     value
     |> unmeta()
@@ -120,7 +120,8 @@ defmodule Tria.Pass.Evaluation do
   #   end
   # end
 
-  # I use process dictionary just because optimization can hit the code at least once
+  # I use process dictionary just because optimization we need to know if anything
+  # was optimized
   defp hit, do: Process.put(:hit, true)
 
   # Main recursive function
@@ -158,7 +159,7 @@ defmodule Tria.Pass.Evaluation do
 
 
       # Equals
-      tri left = right ->
+      tri(left = right) = equation ->
         {left, left_evaluation_context} = run_pattern(left, evaluation_context)
         {right, right_evaluation_context} = run(right, evaluation_context)
 
@@ -172,8 +173,7 @@ defmodule Tria.Pass.Evaluation do
                       {put_bind(evaluation_context, variable, value), binds}
 
                     is_variable(value) ->
-                      hit()
-                      {put_bind(evaluation_context, variable, value), binds}
+                      {put_bind(evaluation_context, variable, value), [bind_to_equal(bind) | binds]}
 
                     is_fn(value) ->
                       {put_bind(evaluation_context, variable, value), [bind_to_equal(bind) | binds]}
@@ -182,6 +182,8 @@ defmodule Tria.Pass.Evaluation do
                       {put_bind(evaluation_context, variable, value), [bind_to_equal(bind) | binds]}
                   end
               end)
+
+            Tracer.tag(evaluation_context, label: :after_binds)
 
             body =
               case binds do
@@ -192,6 +194,11 @@ defmodule Tria.Pass.Evaluation do
                   right
 
                 [bind] ->
+                  # There was one bind
+                  # There is one bind
+                  if unmeta(bind) != unmeta(equation) do
+                    hit()
+                  end
                   bind
 
                 # In case there are multiple binds
@@ -292,7 +299,8 @@ defmodule Tria.Pass.Evaluation do
 
       # Map cons
       # TODO think about joining in map cons
-      {:"%{}", map_meta, [{:"|", cons_meta, [map, pairs]}]} ->
+      {:"%{}", map_meta, [{:"|", cons_meta, [map, pairs1]} | pairs2]} ->
+        pairs = pairs1 ++ pairs2
         {map, map_evaluation_context} = run(map, evaluation_context)
         {pairs, evaluation_context} =
           Enum.map_reduce(pairs, map_evaluation_context, fn {key, value}, new_evaluation_context ->
@@ -413,7 +421,13 @@ defmodule Tria.Pass.Evaluation do
 
       # Variable
       variable when is_variable(variable) ->
-        case fetch_bind(evaluation_context, variable) do
+        Tracer.tag(variable, label: :variable)
+        Tracer.tag(evaluation_context, label: :context)
+
+        evaluation_context
+        |> fetch_bind(variable)
+        |> Tracer.tag(label: :fetch_bind_result)
+        |> case do
           :error ->
             {variable, evaluation_context}
 
@@ -472,8 +486,7 @@ defmodule Tria.Pass.Evaluation do
         {patterns, pattern_evaluation_context} = run_pattern(patterns, evaluation_context, new_evaluation_context)
 
         # Since guard is not creating new variables, we can just run evaluation against it
-        {guard, _guard_evaluation_context} = run(guard, evaluation_context <~ pattern_evaluation_context)
-
+        {guard, _guard_evaluation_context} = run(guard, %{evaluation_context <~ pattern_evaluation_context | context: :guard})
         {{:when, meta, patterns ++ [guard]}, pattern_evaluation_context}
 
       # Pin . We handle pin separately before variables
@@ -526,17 +539,21 @@ defmodule Tria.Pass.Evaluation do
     Enum.reduce(evaluation_contexts, fn right, left -> left <~ right end)
   end
 
-  defp (%{bindings: left_bindings} = left) <~ (%{bindings: right_bindings}) do
-    bindings = Map.merge(left_bindings, right_bindings, fn
-      _, v, v -> v
-      _, _, _ -> raise "What the fuck"
-    end)
-    %{left | bindings: bindings}
-  rescue
-    e ->
-      IO.inspect left_bindings, label: :left
-      IO.inspect right_bindings, label: :right
-      reraise e, __STACKTRACE__
+  defp left <~ right do
+    %{bindings: left_bindings,  context: left_context}  = left
+    %{bindings: right_bindings, context: right_context} = right
+
+    bindings =
+      Map.merge(left_bindings, right_bindings, fn
+        # This fn is just a check to assure that contexts do not have conflicts
+        _, v, v -> v
+        _, _, _ ->
+          IO.inspect(left_bindings, label: :left_bindings)
+          IO.inspect(right_bindings, label: :right_bindings)
+          raise "What the fuck"
+      end)
+
+    %{left | context: left_context || right_context, bindings: bindings}
   end
 
   defp precomputable?(_evaluation_context, dot_call(module, _, args) = dc) when is_atom(module) do
@@ -584,12 +601,10 @@ defmodule Tria.Pass.Evaluation do
         fold(body, inner_evaluation_context.bindings)
 
       [] ->
-        # IO.inspect args, label: :args
-        # IO.inspect (for {_, _, [l | _]} <- clauses, do: l), label: :patterns
+        # Nothing will ever match in this case
+        # TODO proper raise
 
         hit()
-        # Nothing will ever match in this case
-        # FIXME proper raise
         IO.warn "This fn will never success"
         error.(args)
 

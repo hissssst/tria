@@ -213,9 +213,13 @@ defmodule Tria.Common do
         end)
       end
       # Fixes the https://github.com/elixir-lang/elixir/issues/12162
+      # and the https://github.com/elixir-lang/elixir/issues/12248
       |> Macro.prewalk(fn
         {{:".", _, [:erlang, :binary_to_atom]}, _, [{:"<<>>", _, items}, :utf8]} ->
           {{:".", [], [:erlang, :binary_to_atom]}, [], [{:"<<>>", [], items}, :utf1488]}
+
+        {{:".", _, [List, :to_charlist]}, _, args} ->
+          {{:".", [], [{:__aliases__, [], [:List]}, :to_charlist]}, [], args}
 
         other ->
           other
@@ -281,7 +285,7 @@ defmodule Tria.Common do
   @doc """
   Public macro for MFA call AST like `Module.function(arg1, arg2, arg3)`
   """
-  defmacro dot_call(module, function, args, dotmeta \\ {:_, [], Elixir}, callmeta \\ {:_, [], Elixir}) do
+  defmacro dot_call(module, function, args, dotmeta \\ nil, callmeta \\ nil) do
     module =
       case module do
         {:__aliases__, _, _} = aliased ->
@@ -291,12 +295,15 @@ defmodule Tria.Common do
           other
       end
 
-    if Macro.Env.in_match?(__CALLER__) do
-      quote do: {{:., unquote(dotmeta), [unquote(module), unquote(function)]}, unquote(callmeta), unquote(args)}
-    else
-      quote do: {{:., [], [unquote(module), unquote(function)]}, [], unquote(args)}
-    end
+    dotmeta  = dot_meta(__CALLER__, dotmeta)
+    callmeta = dot_meta(__CALLER__, callmeta)
+
+    quote do: {{:., unquote(dotmeta), [unquote(module), unquote(function)]}, unquote(callmeta), unquote(args)}
   end
+
+  defp dot_meta(%{context: :match}, nil), do: {:_, [], Elixir}
+  defp dot_meta(%{context: _}, nil), do: []
+  defp dot_meta(_, value), do: value
 
   @doc """
   Public macro for MFA-call AST like `Module.function(arg1, arg2, arg3)`
@@ -307,6 +314,24 @@ defmodule Tria.Common do
     else
       quote do: {{:., [], [unquote(function)]}, [], unquote(args)}
     end
+  end
+
+  @doc """
+  Macro for pinning variables
+  """
+  defmacro pin(value) do
+    if Macro.Env.in_match?(__CALLER__) do
+      quote do: {:^, _, [unquote value]}
+    else
+      quote do: {:^, [], [unquote value]}
+    end
+  end
+
+  @doc """
+  Macro for pinning variables, but with meta
+  """
+  defmacro pin(value, meta) do
+    quote do: {:^, unquote(meta), [unquote value]}
   end
 
   @doc """
@@ -491,5 +516,16 @@ defmodule Tria.Common do
   def postwalk(ast, acc, fun) do
     traverse(ast, acc, fn x, a -> {x, a} end, fun)
   end
+
+  @doc """
+  Recursively removes metadata from AST
+  """
+  @spec unmeta(Tria.t()) :: Tria.t()
+  def unmeta([head | tail]) do
+    [unmeta(head) | unmeta(tail)]
+  end
+  def unmeta({left, right}), do: {unmeta(left), unmeta(right)}
+  def unmeta({left, _, right}), do: {unmeta(left), [], unmeta(right)}
+  def unmeta(other), do: other
 
 end

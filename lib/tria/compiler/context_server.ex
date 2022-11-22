@@ -72,7 +72,7 @@ defmodule Tria.Compiler.ContextServer do
   def handle_call({:ready, _module}, _from, state) do
     # We generate stub every time the module is ready,
     # because __struct__ behaves this way
-    generate_stub(state)
+    # generate_stub(state)
     {:reply, :ok, state}
   end
 
@@ -90,21 +90,15 @@ defmodule Tria.Compiler.ContextServer do
   end
 
   defp do_evaluate(_kind, clauses, args) do
-    quoted = quote do: unquote(Compiler.def_to_fn(clauses)).(unquote_splicing args)
+    quoted = quote do: unquote(Compiler.clauses_to_fn(clauses)).(unquote_splicing args)
     Tria.Interpreter.eval!(quoted, [], :infinity)
   end
 
   defp generate_stub(%{name: context, definitions: definitions} = state) do
     funcs =
-      Enum.map(definitions, fn {{module, name, arity}, {_kind, _clauses}} ->
-        fname = Compiler.fname(module, name)
+      Enum.map(definitions, fn {{module, name, arity}, {kind, _clauses}} ->
+        fname = Compiler.fname({module, kind, name, arity})
         args = for _ <- List.duplicate(nil, arity), do: {:arg, [counter: gen_uniq_context()], Elixir}
-
-        # args =
-        #   case kind do
-        #     :defmacro -> [{:caller, [], :tria_caller} | args]
-        #     _ -> args
-        #   end
 
         body = [do: dot_call(__MODULE__, :evaluate, [context, Macro.escape({module, name, arity}), args])]
         define(:def, fname, args, [], body)
@@ -137,22 +131,32 @@ defmodule Tria.Compiler.ContextServer do
   end
 
   defp definitions_to_funcs(definitions) do
-    Enum.flat_map(definitions, fn {{module, name, arity}, {kind, clauses}} ->
-      Tracer.tag_ast(clauses, {module, name, arity}, label: :pregenerating, with_contexts: true)
+    alias Tria.FunctionRepo
 
-      fname = Compiler.fname(module, name)
+    definitions
+    |> Enum.map(fn {{module, name, arity}, {kind, clauses}} ->
+      the_fn = Compiler.clauses_to_fn(clauses)
+      FunctionRepo.insert({module, name, arity}, :tria, the_fn)
+      {{module, kind, name, arity}, the_fn}
+    end)
+    |> Enum.flat_map(fn {{module, kind, name, arity} = signature, the_fn} ->
+      fname = Compiler.fname(signature)
 
       clauses =
-        clauses
-        |> run(definitions)
-        |> Tracer.tag_ast({module, name, arity}, label: :generating, with_contexts: true)
+        Tracer.with_local_trace({module, name, arity}, fn ->
+          the_fn
+          |> Tracer.tag_ast(label: :before_passes)
+          |> Tria.run(translate: false)
+          |> contextify_local_calls(definitions)
+          |> Tracer.tag_ast(label: :generating)
+          |> Compiler.fn_to_clauses()
+        end)
 
       create_definition(kind, fname, clauses)
     end)
   end
 
   defp create_definition(kind, fname, clauses) when kind in ~w[defmacro defmacrop]a do
-    # clauses = add_caller(clauses)
     create_definition(:def, fname, clauses)
   end
 
@@ -163,22 +167,13 @@ defmodule Tria.Compiler.ContextServer do
     end)
   end
 
-  # Transforms the `{args, guards, body}` to the `fn`, runs optimizers
-  # and transforms the result back to `{args, guards, body}`
-  defp run(clauses, definitions) do
-    clauses
-    |> Compiler.def_to_fn()
-    |> Tria.run(translate: false)
-    |> contextify_local_calls(definitions)
-    |> Compiler.fn_to_def()
-  end
-
   defp contextify_local_calls(ast, definitions) do
     postwalk(ast, fn
-      dot_call(module, function, args, _, callmeta) = call when is_atom(module) and is_atom(function) ->
-        mfarity = {module, function, length(args)}
+      dot_call(module, name, args, _, callmeta) = call when is_atom(module) and is_atom(name) ->
+        arity = length(args)
+        mfarity = {module, name, arity}
         case definitions do
-          %{^mfarity => _} -> {Compiler.fname(module, function), callmeta, args}
+          %{^mfarity => {kind, _clauses}} -> {Compiler.fname({module, kind, name, arity}), callmeta, args}
           _ -> call
         end
 

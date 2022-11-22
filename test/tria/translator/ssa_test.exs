@@ -2,7 +2,9 @@ defmodule Tria.Translator.SSATest do
   use ExUnit.Case
 
   import Tria.Tri
-  import Tria.Common, only: [inspect_ast: 2], warn: false
+  import Tria.Common,
+    only: [is_pinned: 1, inspect_ast: 2, is_variable: 1, prewalk: 2],
+    warn: false
   alias Tria.Translator.SSA
 
   import Tria.TestHelpers
@@ -17,11 +19,10 @@ defmodule Tria.Translator.SSATest do
           fn %{old_x: ^x, x: x = _} when :erlang.is_atom(x) -> x end
         end
         |> SSA.from_tria()
-        |> inspect_ast(label: :result, with_contexts: true)
 
       assert_tri code do
         x1 = 1
-        fn %{old_x: ^x, x: x2 = underscore} when :erlang.is_atom(x2) -> x2 end
+        fn %{old_x: ^x1, x: x2 = underscore} when :erlang.is_atom(x2) -> x2 end
       end
 
       assert 3 == length Enum.uniq [underscore, x1, x2]
@@ -174,7 +175,6 @@ defmodule Tria.Translator.SSATest do
           <<x :: binary-size(x), x :: binary-size(1)>> = s
         end
         |> SSA.from_tria()
-        |> inspect_ast(label: :result, with_contexts: true)
 
       assert_tri code do
         x1 = 1
@@ -195,10 +195,92 @@ defmodule Tria.Translator.SSATest do
 
       assert_tri code do
         x1 = 0
-        <<x2 :: 8, y :: binary-size(x2)>> = <<1, 2>>
+        <<x2 :: 8, y :: tri {:-, _, [{:binary, _, _}, {:size, _, [x2]}]}>> = <<1, 2>>
       end
 
       assert 3 == length Enum.uniq [y, x1, x2]
+    end
+  end
+
+  describe "Pin known" do
+    test "Simple" do
+      tri do
+        x = 0
+        x = 1
+      end
+      |> SSA.from_tria(pin_known: true)
+      |> assert_tri do
+        x = 0
+        ^x = 1
+      end
+    end
+
+    test "Reused" do
+      tri do
+        x = 0
+        x = 1
+        y = [x]
+      end
+      |> SSA.from_tria(pin_known: true)
+      |> assert_tri do
+        x = 0
+        ^x = 1
+        y = [x]
+      end
+
+      assert x != y
+    end
+
+    test "Different clauses" do
+      tri do
+        case x do
+          :first_clause ->
+            x = 0
+            x = 1
+
+          :second_clause ->
+            x = 2
+        end
+      end
+      |> SSA.from_tria(pin_known: true)
+      |> assert_tri do
+        case x1 do
+          :first_clause ->
+            x2 = 0
+            ^x2 = 1
+
+          :second_clause ->
+            x3 = 2
+        end
+      end
+
+      assert Enum.all?([x1, x2, x3], &is_variable/1)
+      assert 3 == length Enum.uniq [x1, x2, x3]
+    end
+
+    test "Regression case" do
+      tri do
+        case something do
+          x when x == false when x == nil ->
+            x
+
+          _ ->
+            :other
+        end
+      end
+      |> SSA.from_tria(pin_known: true)
+      |> assert_tri do
+        case something do
+          x when x == false when x == nil ->
+            x
+
+          _ ->
+            :other
+        end
+      end
+
+      assert not is_pinned x
+      assert x != something
     end
   end
 end

@@ -6,8 +6,7 @@ defmodule Tria.Translator.Elixir do
   Removes `&` captures
   Expands aliases, etc
 
-  #TODO ignore `quote` in ast
-  #TODO Remove structures syntax
+  #TODO from_tria traverse closures to captures
   """
 
   @behaviour Tria.Translator
@@ -37,7 +36,7 @@ defmodule Tria.Translator.Elixir do
   end
 
   # Because Tria is a subset of Elixir
-  def from_tria(tria_ast) do
+  def from_tria(tria_ast, _opts \\ []) do
     Macro.prewalk(tria_ast, fn
       # Translates tria variables to elixir variables
       {name, meta, counter} when is_integer(counter) ->
