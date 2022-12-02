@@ -43,11 +43,12 @@ defmodule Tria.Compiler do
   """
   @type the_fn :: {:fn, list(), [Tria.t() | Macro.t()]}
 
-  import Tria.Common
-  alias Tria.Codebase
+  import Tria.Language
   alias Tria.Compiler.ContextServer
-  alias Tria.Tracer
-  alias Tria.Translator.Abstract
+  alias Tria.Compiler.AbstractTranslator
+  alias Tria.Compiler.ElixirTranslator
+  alias Tria.Debug.Tracer
+  alias Tria.Language.Codebase
 
   # Project compilation pipeline
 
@@ -127,7 +128,7 @@ defmodule Tria.Compiler do
           Tracer.with_local_trace(signature, fn ->
             clauses
             |> Tracer.tag(label: :abstract)
-            |> Abstract.to_tria!(env: env(module, file), locals: locals)
+            |> AbstractTranslator.to_tria!(env: env(module, file), locals: locals)
             |> remotify_local_calls(module, locals)
             |> put_file(file)
             |> Tracer.tag(label: :after_translation)
@@ -158,7 +159,7 @@ defmodule Tria.Compiler do
   defp functions([]), do: []
 
   defp fetch_docs(binary) do
-    {:ok, doc} = Tria.Codebase.fetch_chunk(binary, 'Docs')
+    {:ok, doc} = Codebase.fetch_chunk(binary, 'Docs')
     {:docs_v1, _, :elixir, "text/markdown", _, _, docs} = :erlang.binary_to_term(doc)
     for {{k, name, arity}, _, _, %{"en" => doc}, _} when k in ~w[macro function]a <- docs, into: %{} do
       {{name, arity}, doc}
@@ -300,7 +301,7 @@ defmodule Tria.Compiler do
 
   # Sorry for this silly name
   def define_definition({{_module, kind, name, _arity}, clauses}) do
-    import Tria.Translator.Elixir, only: [from_tria: 1]
+    import ElixirTranslator, only: [from_tria: 1]
 
     defs =
       clauses

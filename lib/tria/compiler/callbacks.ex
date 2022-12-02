@@ -5,7 +5,7 @@ defmodule Tria.Compiler.Callbacks do
   """
 
   alias Tria.Compiler.ContextServer
-  import Tria.Common
+  import Tria.Compiler.ElixirTranslator, only: [unalias: 1]
 
   defmacro __using__(opts) do
     context = unalias Keyword.get(opts, :context, TriaGlobalContext)
@@ -14,6 +14,7 @@ defmodule Tria.Compiler.Callbacks do
 
     Module.register_attribute(__CALLER__.module, :tria, accumulate: true, persist: true)
     Module.register_attribute(__CALLER__.module, :tria_opts, persist: true)
+
     quote do
       @after_compile unquote(__MODULE__)
       @tria_opts unquote(opts)

@@ -7,11 +7,14 @@ defmodule Tria.Compiler.ContextServer do
   """
 
   use GenServer
-  import Tria.Common
+  import Tria.Language
 
-  alias Tria.Translator.Elixir, as: ElixirTranslator
   alias Tria.Compiler
-  alias Tria.Tracer
+  alias Tria.Compiler.ElixirTranslator
+  alias Tria.Debug.Tracer
+  alias Tria.Language.FunctionRepo
+  alias Tria.Language.Interpreter
+  alias Tria.Optimizer
 
   # Public
 
@@ -91,7 +94,7 @@ defmodule Tria.Compiler.ContextServer do
 
   defp do_evaluate(_kind, clauses, args) do
     quoted = quote do: unquote(Compiler.clauses_to_fn(clauses)).(unquote_splicing args)
-    Tria.Interpreter.eval!(quoted, [], :infinity)
+    Interpreter.eval!(quoted, [], :infinity)
   end
 
   defp generate_stub(%{name: context, definitions: definitions} = state) do
@@ -131,8 +134,6 @@ defmodule Tria.Compiler.ContextServer do
   end
 
   defp definitions_to_funcs(definitions) do
-    alias Tria.FunctionRepo
-
     definitions
     |> Enum.map(fn {{module, name, arity}, {kind, clauses}} ->
       the_fn = Compiler.clauses_to_fn(clauses)
@@ -146,7 +147,7 @@ defmodule Tria.Compiler.ContextServer do
         Tracer.with_local_trace({module, name, arity}, fn ->
           the_fn
           |> Tracer.tag_ast(label: :before_passes)
-          |> Tria.run(translate: false)
+          |> Optimizer.run()
           |> contextify_local_calls(definitions)
           |> Tracer.tag_ast(label: :generating)
           |> Compiler.fn_to_clauses()

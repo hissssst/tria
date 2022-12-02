@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Compile.Tria do
   use Mix.Task.Compiler
 
   alias Tria.Compiler
-  alias Tria.Tracer, warn: false
+  alias Tria.Debug.Tracer
 
   def run(_args) do
     Mix.Project.get!() # Just to make sure that project exists

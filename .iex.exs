@@ -1,3 +1,3 @@
-import Tria.Common
-import Tria.Tri
-alias Tria.{Codebase, FunctionRepo, Interpreter, Analyzer.Purity, Pass.Evaluation}
+import Tria.Language
+import Tria.Language.Tri
+alias Tria.Language.{Codebase, FunctionRepo, Interpreter, Analyzer.Purity}
