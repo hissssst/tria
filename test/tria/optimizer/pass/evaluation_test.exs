@@ -5,7 +5,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
   import Tria.Language.Tri
   import Tria.TestHelpers
 
-  alias Tria.Optimizer.Pass.Evaluation2, as: Evaluation
+  alias Tria.Optimizer.Pass.Evaluation, as: Evaluation
   alias Tria.Compiler.SSATranslator
 
   @tri_opts meta: false
@@ -14,20 +14,10 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
   @compile :nowarn_unused_vars
   @compile {:nowarn_unused_vars, true}
 
-  defp run_while(ast) do
+  defp run_while(ast, opts \\ []) do
     ast
     |> SSATranslator.from_tria()
-    |> do_run_while()
-  end
-
-  defp do_run_while(ast) do
-    case Evaluation.run_once(ast) do
-      {:ok, new_ast} ->
-        run_while(new_ast)
-
-      {:error, :nothing_to_evaluate} ->
-        ast
-    end
+    |> Evaluation.run_while(opts)
   end
 
   defp last_line({:__block__, [], lines}) do
@@ -38,21 +28,21 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
   describe "Structural evaluation" do
     test "Block joining" do
       tri do
-        (x1(); x2()); (x3(); x4()); (x5(); x6(); x7())
+        (M.x1(); M.x2()); (M.x3(); M.x4()); (M.x5(); M.x6(); M.x7())
       end
       |> run_while()
       |> assert_tri do
-        x1(); x2(); x3(); x4(); x5(); x6(); x7()
+        M.x1(); M.x2(); M.x3(); M.x4(); M.x5(); M.x6(); M.x7()
       end
     end
 
     test "Block literal removal" do
       tri do
-        1; 2; f(); 3; 4; 5
+        1; 2; M.f(); 3; 4; 5
       end
       |> run_while()
       |> assert_tri do
-        f(); 5
+        M.f(); 5
       end
     end
 
@@ -82,7 +72,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       end
       |> run_while()
       |> assert_tri do
-        %{x | a: 2, b: 3, c: 4}
+        %{_x | a: 2, b: 3, c: 4}
       end
     end
 
@@ -92,7 +82,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       end
       |> run_while()
       |> assert_tri do
-        %{x | x: 2, x: 3}
+        %{_x | x: 2, x: 3}
       end
     end
   end
@@ -104,7 +94,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         y = 2
         f(x, y)
       end
-      |> run_while()
+      |> run_while(remove_unused: false)
       |> assert_tri do
         x = 1
         y = 2
@@ -119,13 +109,11 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         function = fn x -> f(x, 1) end
         f(function)
       end
-      |> run_while()
+      |> run_while(remove_unused: false)
+      |> last_line()
       |> assert_tri do
-        function = fn x1 -> f(x1, 1) end
-        f(fn x2 -> f(x2, 1) end)
+        f(fn x -> f(x, 1) end)
       end
-
-      assert x1 != x2
     end
 
     test "Variable chained" do
@@ -134,12 +122,14 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         y = x
         z = y
       end
-      |> run_while()
+      |> run_while(remove_unused: false)
       |> assert_tri do
         x = 1
         y = 1
         z = 1
       end
+
+      assert_unique [x, y, z]
     end
 
     test "Quoted literal composed" do
@@ -149,7 +139,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         z = [x, y]
         list = [z, z]
       end
-      |> run_while()
+      |> run_while(remove_unused: false)
       |> assert_tri do
         x = 1
         y = 2
@@ -169,12 +159,12 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
           _ -> 2
         end
       end
-      |> run_while()
+      |> run_while(remove_unused: false)
       |> assert_tri do
         x = 1
         y = 2
         case 1 do
-          _ when 2 > z -> 1
+          _ when Kernel.>(2, z) -> 1
           _ -> 2
         end
       end
@@ -194,17 +184,16 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       |> run_while()
       |> assert_tri do
         x2 = function(x1)
-        y = 1
         case something do
           _ when Kernel.>(x2, 1) -> 1
           _ -> 2
         end
       end
 
-      assert_unique [x1, x2, y, something]
+      assert_unique [x1, x2, something]
     end
 
-    test "Guard propagation recursive" do
+    test "Guard propagation recursive stops" do
       tri do
         x = function()
         y = 1
@@ -214,7 +203,8 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
           _ -> 2
         end
       end
-      |> run_while()
+      |> run_while(remove_unused: false)
+      # |> inspect_ast(label: :result, with_contexts: true)
       |> assert_tri do
         x = function()
         y = 1
@@ -227,6 +217,24 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
 
       assert_unique [x, y, z, something, m]
     end
+
+    test "Definitions in strange places" do
+      tri do
+        x = (x = 1; y = x + 1)
+        z = [y = x + 1, x = y - 1]
+        case z = z ++ z do
+          ^z -> z
+          z -> z
+        end
+      end
+      |> run_while(remove_unused: false)
+      |> inspect_ast(label: :result, with_contexts: true)
+      |> assert_tri do
+        x2 = (x1 = 1; y1 = 2)
+        z1 = [y2 = 3, x3 = 1]
+        z2 = [3, 1, 3, 1]
+      end
+    end
   end
 
   describe "Context inheritance" do
@@ -238,7 +246,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         y = x
         z = [x, y]
       end
-      |> run_while()
+      |> run_while(remove_unused: false)
       |> assert_tri do
         x1 = 1
         y1 = 1
@@ -253,36 +261,41 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
     test "List, map, tuple and function arguments" do
       tri do
         [x = 1, x = 2 | x = 3]
-        f(x) # Here we use `f` to make sure that block optimization does not kick in
+        M.f(x) # Here we use `f` to make sure that block optimization does not kick in
 
         {y = 1, y = 2, y = 3}
-        f(y)
+        M.f(y)
 
         %{z = %{} | x: (z = 2), x: (z = 3)}
-        f(z)
+        M.f(z)
 
         f(a = 1, a = 2, a = 3)
-        f(a)
+        M.f(a)
 
         (b = 1).(b = 2, b = 3)
-        f(b)
+        M.f(b)
       end
-      |> run_while()
+      |> run_while(remove_unused: false)
+      # |> inspect_ast(label: :result)
       |> assert_tri do
-        [x1 = 1, x2 = 2 | x3 = 3]
-        f(3)
-
-        {y1 = 1, y2 = 2, y3 = 3}
-        f(3)
-
-        %{z1 = %{} | x: (z2 = 2), x: (z3 = 3)}
-        f(3)
-
-        f(a1 = 1, a2 = 2, a3 = 3)
-        f(3)
-
+        x1 = 1
+        x2 = 2
+        x3 = 3
+        M.f(3)
+        y1 = 1
+        y2 = 2
+        y3 = 3
+        M.f(3)
+        z1 = %{}
+        z2 = 2
+        z3 = 3
+        M.f(3)
+        a1 = 1
+        a2 = 2
+        a3 = 3
+        M.f(3)
         (b1 = 1).(b2 = 2, b3 = 3)
-        f(3)
+        M.f(3)
       end
 
       assert_unique [
@@ -304,7 +317,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
           {:z, y} when maybe -> y
         end
       end
-      |> run_while()
+      |> run_while(remove_unused: false)
       |> assert_tri do
         x1 = 1
         case something do
@@ -328,8 +341,8 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
           1, z when maybe -> f(x, z)
         end
       end
-      |> run_while()
-      |> inspect_ast(label: :result)
+      |> run_while(remove_unused: false)
+      # |> inspect_ast(label: :result, with_contexts: true)
       |> assert_tri do
         x1 = 1
         fn
@@ -358,15 +371,19 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
     end
 
     test "x + y" do
-      evaluated =
-        tri do
-          a = 1 + 2
-          b = 2 + 2
-          a + b + x + y
-        end
-        |> run_while()
+      tri do
+        a = 1 + 2
+        b = 2 + 2
+        a + b + x + y
+      end
+      |> run_while(remove_unused: false)
+      |> assert_tri do
+        a = 3
+        b = 4
+        Kernel.+(Kernel.+(7, x), y)
+      end
 
-      assert tri(Kernel.+(Kernel.+(7, x), y)) = last_line evaluated
+      assert_unique [a, b, x, y]
     end
   end
 
@@ -443,6 +460,8 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
           _ -> :error
         end
       end
+
+      assert_unique [x, y, l, something]
     end
 
     test "same variable twice" do
@@ -475,6 +494,8 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
           1 when Kernel.>(something, 10) -> :ok
         end
       end
+
+      assert x != something
     end
 
     test "outer context in deeper in guard" do
@@ -488,13 +509,13 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
 
       # Why no tri? Well, because `assert` is buggy
       assert {
-        :case, _, [arg, [do: [
+        :case, _, [_arg, [do: [
           {:"->", _, [
             [{:when, _, [x,
               {andd, _, [
                 {andd, _, [
                   true,
-                  {more, _, [y, 10]}
+                  {more, _, [_y, 10]}
                 ]},
                 {more, _, [x, 10]}
               ]}
@@ -571,7 +592,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         end).({1, 2}, fn _ -> :delete_me end)
       end
       |> run_while()
-      |> inspect_ast(label: :result)
+      # |> inspect_ast(label: :result)
       |> assert_tri do
         {:ok, {2}}
       end
@@ -613,6 +634,8 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
           :error -> Kernel.throw(:path_not_found)
         end
       end
+
+      assert_unique [function, new_value]
     end
 
     test "Pathex-style fn inlining 3" do
@@ -636,7 +659,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       end
       |> run_while()
       |> assert_tri do
-        func = fn x -> Kernel.+(x, 1) end
         12
       end
     end
@@ -695,6 +717,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       end
       |> run_while()
       |> last_line()
+      # |> inspect_ast(label: :result, with_contexts: true)
       |> assert_tri do
         fn
           :view, {x1, func1} ->
@@ -802,6 +825,8 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         data_size = Kernel.-(block_size, 1)
         <<block::binary-size(data_size), rest::binary>> = bin
       end
+
+      assert_unique [data_size, block_size, rest, bin, block]
     end
 
     test "one" do
@@ -823,6 +848,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         end
       end
       |> run_while()
+      # |> inspect_ast(label: :result)
       |> assert_tri do
         data_size = Kernel.-(block_size, 1)
 
@@ -929,6 +955,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       end
       |> run_while()
       |> last_line()
+      # |> inspect_ast(label: :result, with_contexts: true)
       |> assert_tri do
         fn
           :view, {x1, function} ->
@@ -1001,6 +1028,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       end).(input, fn x -> {:ok, x} end)
     end
     |> run_while()
+    # |> inspect_ast(label: :result, with_contexts: true)
     |> last_line()
     |> assert_tri do
       case input do
@@ -1029,82 +1057,136 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
 
     test "Defined variable remains present" do
       tri do
-        underscore_5063 = tri(S).__struct__()
+        structure = tri(S).__struct__()
 
-        {underscore_5095, underscore_5127} =
-          Enum.split_with(underscore_5031, fn {underscore_5159, _} ->
-            :maps.is_key(underscore_5159, underscore_5063)
+        {with_key, without_key} =
+          Enum.split_with(list, fn {key, _} ->
+            :maps.is_key(key, structure)
           end)
       end
       |> run_while()
-      |> inspect_ast(label: :result)
+      |> last_line()
       |> assert_tri do
-        {underscore_5095, underscore_5127} =
-          Enum.split_with(underscore_5031, fn {underscore_5159, _} ->
-            :maps.is_key(underscore_5159, %{__struct__: S, x: 1})
+        {with_key, without_key} =
+          Enum.split_with(list, fn {key, _} ->
+            :maps.is_key(key, %{__struct__: S, x: 1})
           end)
       end
+
+      assert_unique [with_key, without_key, key, list]
     end
   end
 
-  describe "Try" do
-    test "all-in-one" do
-      tri do
-        x = 1
-        try do
-          x = x + 1
-          [1, x, Module.function(3)]
-        catch
-          :thrown -> :thrown
-        rescue
-          x in ArgumentError -> {:xinae, x}
-          ArgumentError -> {:ae, x}
-          y -> {x, y}
-        else
-          1 -> 1
-          2 -> 2
-          x -> x
-        after
-          :fuck
-        end
-      end
-      |> run_while()
-      |> inspect_ast(label: :result)
-      # |> assert_tri do
-      #   x1 = 1
-      #   try do
-      #     x2 = 2
-      #     [1, 2, function(3)]
-      #   catch
-      #     :thrown -> :thrown
-      #   rescue
-      #     x3 in ArgumentError -> {:xinae, x3}
-      #     ArgumentError -> {:ae, 1}
-      #     y -> {1, y}
-      #   else
-      #     1 -> 1
-      #     2 -> 2
-      #     x4 -> x4
-      #   after
-      #     :fuck
-      #   end
-      # end
+  # describe "Try" do
+  #   test "all-in-one" do
+  #     tri do
+  #       x = 1
+  #       try do
+  #         x = x + 1
+  #         [1, x, Module.function(3)]
+  #       catch
+  #         :thrown -> :thrown
+  #       rescue
+  #         x in ArgumentError -> {:xinae, x}
+  #         ArgumentError -> {:ae, x}
+  #         y -> {x, y}
+  #       else
+  #         1 -> 1
+  #         2 -> 2
+  #         x -> x
+  #       after
+  #         :fuck
+  #       end
+  #     end
+  #     |> run_while()
+  #     |> inspect_ast(label: :result)
+  #     |> assert_tri do
+  #       x1 = 1
+  #       try do
+  #         x2 = 2
+  #         [1, 2, function(3)]
+  #       catch
+  #         :thrown -> :thrown
+  #       rescue
+  #         x3 in ArgumentError -> {:xinae, x3}
+  #         ArgumentError -> {:ae, 1}
+  #         y -> {1, y}
+  #       else
+  #         1 -> 1
+  #         2 -> 2
+  #         x4 -> x4
+  #       after
+  #         :fuck
+  #       end
+  #     end
 
-      # assert_unique [x1, x2, x3, x4, y]
-    end
-  end
+  #      assert_unique [x1, x2, x3, x4, y]
+  #   end
+  # end
 
   describe "Usage detection" do
     test "Block" do
       tri do
         x = function()
         y = x + x
-        z = f(y)
+        z = f(y, y)
       end
-      |> SSATranslator.from_tria()
-      |> Evaluation.run(%Evaluation{})
-      |> elem(1)
-      |> IO.inspect()
+      |> run_while(remove_unused: true)
+      |> assert_tri do
+        x = function()
+        y = Kernel.+(x, x)
+        f(y, y)
+      end
+
+      assert_unique [x, y]
+    end
+
+    test "Used once in pin removed" do
+      tri do
+        x = [y, z]
+        {^x, ^x, bar} = foo
+        bar
+      end
+      |> run_while(remove_unused: true)
+      |> assert_tri do
+        {[^y, ^z], [^y, ^z], bar} = foo
+        bar
+      end
+
+      assert_unique [y, z, bar, foo]
+    end
+
+    test "Pure, vared, quoted used once" do
+      tri do
+        x = a + b
+        y = [c, c, c]
+        z = [1, 2, 3]
+        impure = :persistent_term.get(:key)
+        {x, y, z, impure}
+      end
+      |> run_while(remove_unused: true)
+      |> assert_tri do
+        impure = :persistent_term.get(:key)
+        {Kernel.+(a, b), [c, c, c], [1, 2, 3], impure}
+      end
+
+      assert_unique [a, b, c, impure]
+    end
+  end
+
+  describe "Block unused removal" do
+    test "with fn" do
+      tri do
+        x = [1, fn x -> y = M.f(); x + y end]
+        {x, x}
+      end
+      |> run_while()
+      |> assert_tri do
+        x1 = [1, fn x2 -> y = M.f(); Kernel.+(x2, y) end]
+        {x1, x1}
+      end
+
+      assert_unique [x1, x2, y]
     end
   end
 end

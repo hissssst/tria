@@ -5,7 +5,7 @@ defmodule Tria.Language.Analyzer do
 
   def info(ast, _opts \\ []) do
     cond do
-      Macro.quoted_literal?(ast) ->
+      quoted_literal?(ast) ->
         :literal
 
       vared_literal?(ast) ->
@@ -19,24 +19,8 @@ defmodule Tria.Language.Analyzer do
     end
   end
 
-  def vared_literal?(ast) do
-    case ast do
-      [head | tail] ->
-        vared_literal?(head) and vared_literal?(tail)
-
-      {left, right} ->
-        vared_literal?(left) and vared_literal?(right)
-
-      vl when is_variable(vl) or is_literal(vl) ->
-        true
-
-      {s, _, children} when s in ~w[%{} {} |]a ->
-        vared_literal?(children)
-
-      _ ->
-        false
-    end
+  def is_pure(ast) do
+    Purity.check_analyze(ast)
   end
-
 
 end

@@ -12,8 +12,6 @@ defmodule Tria.Language.Interpreter do
   # Because we redefine it
   import Kernel, except: [&&: 2]
 
-  import Macro, only: [quoted_literal?: 1]
-
   import Tria.Language
   import Tria.Language.Ternary
   import Tria.Language.Tri

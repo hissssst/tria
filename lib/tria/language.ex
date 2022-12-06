@@ -4,6 +4,8 @@ defmodule Tria.Language do
   Like `Macro`, but for Tria. Contains useful guards, macro and functions
   """
 
+  import Tria.Language.Binary
+
   # These special forms are variables, but they can be assigned to, only used
   @special_vars ~w[__CALLER__ __DIR__ __ENV__ __MODULE__ __STACKTRACE__]a
 
@@ -222,8 +224,8 @@ defmodule Tria.Language do
             other
         end)
       end
-      # Fixes the https://github.com/elixir-lang/elixir/issues/12162
-      # and the https://github.com/elixir-lang/elixir/issues/12248
+      # https://github.com/elixir-lang/elixir/issues/12162
+      # https://github.com/elixir-lang/elixir/issues/12248
       |> Macro.prewalk(fn
         {{:".", _, [:erlang, :binary_to_atom]}, _, [{:"<<>>", _, items}, :utf8]} ->
           {{:".", [], [:erlang, :binary_to_atom]}, [], [{:"<<>>", [], items}, :utf1488]}
@@ -306,44 +308,33 @@ defmodule Tria.Language do
           other
       end
 
-    dotmeta  = dot_meta(__CALLER__, dotmeta)
-    callmeta = dot_meta(__CALLER__, callmeta)
+    dotmeta  = cmeta(__CALLER__, dotmeta)
+    callmeta = cmeta(__CALLER__, callmeta)
 
     quote do: {{:., unquote(dotmeta), [unquote(module), unquote(function)]}, unquote(callmeta), unquote(args)}
   end
-
-  defp dot_meta(%{context: :match}, nil), do: {:_, [], Elixir}
-  defp dot_meta(%{context: _}, nil), do: []
-  defp dot_meta(_, value), do: value
 
   @doc """
   Public macro for MFA-call AST like `Module.function(arg1, arg2, arg3)`
   """
   defmacro dot_call(function, args) do
-    if Macro.Env.in_match?(__CALLER__) do
-      quote do: {{:., _, [unquote(function)]}, _, unquote(args)}
-    else
-      quote do: {{:., [], [unquote(function)]}, [], unquote(args)}
+    quote do
+      {{:., unquote(cmeta __CALLER__), [unquote(function)]}, unquote(cmeta __CALLER__), unquote(args)}
     end
   end
 
   @doc """
   Macro for pinning variables
   """
-  defmacro pin(value) do
-    if Macro.Env.in_match?(__CALLER__) do
-      quote do: {:^, _, [unquote value]}
-    else
-      quote do: {:^, [], [unquote value]}
-    end
+  defmacro pin(value, meta \\ nil) do
+    quote do: {:^, unquote(cmeta(__CALLER__, meta)), [unquote value]}
   end
 
-  @doc """
-  Macro for pinning variables, but with meta
-  """
-  defmacro pin(value, meta) do
-    quote do: {:^, unquote(meta), [unquote value]}
-  end
+  # C-Meta -- context-aware meta
+  defp cmeta(env, meta \\ nil)
+  defp cmeta(%{context: :match}, nil), do: {:_, [], Elixir}
+  defp cmeta(%{context: _}, nil), do: []
+  defp cmeta(_, value), do: value
 
   @doc """
   Converts Module.function(args) to MFA
@@ -429,6 +420,49 @@ defmodule Tria.Language do
   def size_ast({left, right}), do: size_ast(left) + size_ast(right)
   def size_ast(other), do: :erts_debug.size(other)
 
+  @spec quoted_literal?(Tria.t()) :: boolean()
+  def quoted_literal?({:%{}, _, args}), do: quoted_literal?(args)
+  def quoted_literal?({:{}, _, args}), do: quoted_literal?(args)
+  def quoted_literal?({:<<>>, _, _} = binary) do
+    binary
+    |> traverse_binary_specifiers(true, fn ast, acc -> acc and quoted_literal?(ast) end)
+    |> elem(1)
+  end
+  def quoted_literal?({left, right}), do: quoted_literal?(left) and quoted_literal?(right)
+  def quoted_literal?(list) when is_list(list), do: :lists.all(&quoted_literal?/1, list)
+  def quoted_literal?(term), do: is_atom(term) or is_number(term) or is_binary(term)
+
+  @doc """
+  Like `Macro.quoted_literal?` but also accounts variables in the structure
+  """
+  @spec vared_literal?(Tria.t()) :: boolean()
+  def vared_literal?(ast) do
+    case ast do
+      [head | tail] ->
+        vared_literal?(head) and vared_literal?(tail)
+
+      {left, right} ->
+        vared_literal?(left) and vared_literal?(right)
+
+      vl when is_variable(vl) or is_literal(vl) ->
+        true
+
+      {s, _, children} when s in ~w[%{} {} |]a ->
+        vared_literal?(children)
+
+      {:<<>>, _, _} = binary ->
+        binary
+        |> traverse_binary_specifiers(true, fn ast, acc -> acc and vared_literal? ast end)
+        |> elem(1)
+
+      [] ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
   ## AST Traversal
 
   @type traverse_func :: (Tria.t(), any() -> {Tria.t(), any})
@@ -487,32 +521,110 @@ defmodule Tria.Language do
   Like `Macro.prewalk/2` but for Tria
   """
   @spec prewalk(Tria.t(), (Tria.t() -> Tria.t())) :: Tria.t()
-  def prewalk(ast, fun) do
-    element(prewalk(ast, [], fn x, _ -> {fun.(x), []} end), 0)
+  def prewalk(ast, func) do
+    element(prewalk(ast, [], fn x, _ -> {func.(x), []} end), 0)
   end
 
   @doc """
   Like `Macro.prewalk/3` but for Tria
   """
   @spec prewalk(Tria.t(), any(), traverse_func()) :: {Tria.t(), any()}
-  def prewalk(ast, acc, fun) do
-    traverse(ast, acc, fun, fn x, a -> {x, a} end)
+  def prewalk(ast, acc, func) do
+    traverse(ast, acc, func, fn x, a -> {x, a} end)
   end
 
   @doc """
   Like `Macro.postwalk/2` but for Tria
   """
   @spec postwalk(Tria.t(), (Tria.t() -> Tria.t())) :: Tria.t()
-  def postwalk(ast, fun) do
-    element(postwalk(ast, [], fn x, _ -> {fun.(x), []} end), 0)
+  def postwalk(ast, func) do
+    element(postwalk(ast, [], fn x, _ -> {func.(x), []} end), 0)
   end
 
   @doc """
   Like `Macro.postwalk/3` but for Tria
   """
   @spec postwalk(Tria.t(), any(), traverse_func()) :: {Tria.t(), any()}
-  def postwalk(ast, acc, fun) do
-    traverse(ast, acc, fn x, a -> {x, a} end, fun)
+  def postwalk(ast, acc, func) do
+    traverse(ast, acc, fn x, a -> {x, a} end, func)
+  end
+
+  @type context :: nil | :guard | :match
+
+  @spec context_prewalk(Tria.t(), (Tria.t(), context() -> Tria.t()), context()) :: Tria.t()
+  def context_prewalk(ast, func, context) do
+    {ast, _} = context_prewalk(ast, [], fn ast, _acc, ctx -> {func.(ast, ctx), []} end, context)
+    ast
+  end
+
+  @spec context_prewalk(Tria.t(), acc, (Tria.t(), acc, context() -> {Tria.t(), acc}), context()) :: {Tria.t(), acc}
+        when acc: any()
+  def context_prewalk(ast, acc, func, context)
+  def context_prewalk(ast, acc, func, nil) do
+    {ast, acc} = func.(ast, acc, nil)
+    case ast do
+      {:"->", m, [[{:when, mw, pattern_and_guard}], body]} ->
+        {guard, pattern} = List.pop_at(pattern_and_guard, -1)
+        {pattern, acc} = context_prewalk(pattern, acc, func, :match)
+        {guard, acc} = context_prewalk(guard, acc, func, :guard)
+        {body, acc} = context_prewalk(body, acc, func, nil)
+        { {:"->", m, [[{:when, mw, pattern ++ [guard]}], body]}, acc }
+
+      {atom, m, [pattern, body]} when atom in ~w[-> = <-]a ->
+        {pattern, acc} = context_prewalk(pattern, acc, func, :match)
+        {body, acc} = context_prewalk(body, acc, func, nil)
+        { {atom, m, [pattern, body]}, acc }
+
+      {left, right} ->
+        {left, acc} = func.(left, acc, nil)
+        {left, acc} = context_prewalk(left, acc, func, nil)
+        {right, acc} = func.(right, acc, nil)
+        {right, acc} = context_prewalk(right, acc, func, nil)
+        { {left, right}, acc }
+
+      [head | tail] ->
+        {head, acc} = func.(head, acc, nil)
+        {head, acc} = context_prewalk(head, acc, func, nil)
+        {tail, acc} = func.(tail, acc, nil)
+        {tail, acc} = context_prewalk(tail, acc, func, nil)
+        { [head | tail], acc }
+
+      {node, m, children} ->
+        {node, acc} = func.(node, acc, nil)
+        {node, acc} = context_prewalk(node, acc, func, nil)
+        {children, acc} = func.(children, acc, nil)
+        {children, acc} = context_prewalk(children, acc, func, nil)
+        { {node, m, children}, acc }
+
+      other ->
+        func.(other, acc, nil)
+    end
+  end
+  def context_prewalk(ast, acc, func, :match) do
+    prewalk(ast, acc, & func.(&1, &2, :match))
+  end
+  def context_prewalk(ast, acc, func, :guard) do
+    prewalk(ast, acc, & func.(&1, &2, :guard))
+  end
+
+  @spec findwalk(Tria.t(), (Tria.t() -> boolean())) :: boolean()
+  def findwalk(ast, predicate) do
+    postwalk(ast, fn ast ->
+      if predicate.(ast), do: throw(:found), else: ast
+    end)
+    false
+  catch
+    :found -> true
+  end
+
+  @spec filterwalk(Tria.t(), (Tria.t() -> boolean())) :: [Tria.t()]
+  def filterwalk(ast, predicate) do
+    {_, filtered} =
+      postwalk(ast, [], fn ast, acc ->
+        if predicate.(ast), do: {ast, [ast | acc]}, else: {ast, acc}
+      end)
+
+    filtered
   end
 
 end

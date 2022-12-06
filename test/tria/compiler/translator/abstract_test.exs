@@ -79,7 +79,7 @@ defmodule Tria.Compiler.AbstractTranslatorTest do
         try do
           1
         catch
-          x ->x
+          x -> x
         end
       end
     end
@@ -347,8 +347,8 @@ defmodule Tria.Compiler.AbstractTranslatorTest do
         case 1 do
           _
           when :erlang.orelse(
-                 :erlang.andalso(1 > 2, 3 + 4 < :erlang.length([1, 2, 3 | 4])),
-                 :erlang.tuple_size({1, 2, 3}) > 1
+                 :erlang.andalso(Kernel.>(1, 2), Kernel.<(Kernel.+(3, 4), :erlang.length([1, 2, 3 | 4]))),
+                 Kernel.>(:erlang.tuple_size({1, 2, 3}), 1)
                ) ->
             :ok
         end

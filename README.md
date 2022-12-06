@@ -18,10 +18,9 @@ TODO
 
 [x] Passes tests on some external project correctly
 
-[ ] Passes tests on some big external project correctly
+[x] Passes tests on some big external project correctly
 
-[ ] Passes tests on phoenix
-
+[x] Passes tests on phoenix
 
 # Roadmap
 

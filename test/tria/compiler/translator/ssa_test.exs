@@ -203,14 +203,13 @@ defmodule Tria.Compiler.SSATranslatorTest do
         <<x :: 8, y :: binary-size(8)>> = <<1, 2>>
       end
       |> SSATranslator.from_tria()
-      |> inspect_ast(label: :result, with_contexts: true)
       |> assert_tri do
         binary1 = 1
         <<x :: 8, y :: binary-size(8)>> = <<1, 2>>
       end
 
       assert is_variable binary1
-      assert is_variable binary
+      assert_unique [x, y, binary1]
     end
   end
 
@@ -283,7 +282,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
       |> SSATranslator.from_tria(pin_known: true)
       |> assert_tri do
         case something do
-          x when x == false when x == nil ->
+          x when Kernel.==(x, false) when Kernel.==(x, nil) ->
             x
 
           _ ->

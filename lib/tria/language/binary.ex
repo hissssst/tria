@@ -75,7 +75,7 @@ defmodule Tria.Language.Binary do
 
       {name, meta, [arg]} = spec when is_parametrised(spec) ->
         {arg, state} = func.(arg, state)
-        { {name, meta, arg}, state }
+        { {name, meta, [arg]}, state }
 
       spec when is_reserved(spec) ->
         { spec, state }

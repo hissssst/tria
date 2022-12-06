@@ -17,16 +17,10 @@ defmodule Tria.Language.TriTest do
   end
 
   test "`case` with `when`" do
-    quoted =
-      quote do
-        1 + 2
-      end
+    quoted = quote do: 1 + 2
 
     x =
       case quoted do
-        tri([to_tria: false], x + 2) when is_map(x) ->
-          x + 4
-
         tri([to_tria: false], x + 2) when is_integer(x) ->
           x + 3
       end
@@ -82,7 +76,9 @@ defmodule Tria.Language.TriTest do
         tri to_tria: false, isolate: true do
           x + y
         end
+
       assert {:+, _, [{:x, _, ctx}, {:y, _, ctx}]} = q
+      assert x == 1 # To disable unused warning
     end
   end
 end

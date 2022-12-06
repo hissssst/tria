@@ -15,9 +15,10 @@ defmodule Tria.Language.Bindmap do
   """
   @type predicate :: (Tria.t() -> :cont | :skip | :halt)
 
-  @type unfold_option :: {:while, predicate()}
+  @type unfold_option :: {:while, predicate()} | {:context, Tria.Language.context()}
 
   import Tria.Language
+  import Tria.Language.Guard
   import Tria.Language.Meta, only: [unmeta: 1]
 
   def new(), do: %{}
@@ -63,12 +64,49 @@ defmodule Tria.Language.Bindmap do
 
   @spec unfold(Tria.t(), t(), [unfold_option()]) :: Tria.t()
   def unfold(value, bindmap, opts \\ [])
-  def unfold(value, bindmap, []) do
-    postwalk(value, &Map.get(bindmap, unmeta(&1), &1))
-  end
-
   def unfold(value, bindmap, while: predicate) do
     unfold_while(value, bindmap, predicate)
+  end
+  def unfold(value, bindmap, opts) do
+    context_prewalk(value, fn
+      ast, nil ->
+        Map.get(bindmap, ast, ast)
+
+      ast, :guard ->
+        new = Map.get(bindmap, ast, ast)
+        if is_guard(new) do
+          new
+        else
+          ast
+        end
+
+      pin(ast), :match ->
+        case fetch(bindmap, ast) do
+          {:ok, new} ->
+            cond do
+              findwalk(new, &match?({:%{}, _, _}, &1)) ->
+                ast
+
+              quoted_literal?(new) ->
+                new
+
+              vared_literal?(new) ->
+                postwalk(new, fn
+                  v when is_variable(v) -> pin(v)
+                  other -> other
+                end)
+
+              true ->
+                ast
+            end
+
+          :error ->
+            ast
+        end
+
+      other, :match ->
+        other
+    end, opts[:context])
   end
 
   @spec unfold_while(Tria.t(), t(), predicate()) :: Tria.t()
