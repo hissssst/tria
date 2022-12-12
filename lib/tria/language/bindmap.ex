@@ -30,7 +30,7 @@ defmodule Tria.Language.Bindmap do
 
   @spec put(t(), key(), value()) :: t()
   def put(bindmap, key, value) do
-    Map.put(bindmap, key, value)
+    Map.put(bindmap, unmeta(key), value)
   end
 
   @spec put(t(), [{key(), value()}]) :: t()

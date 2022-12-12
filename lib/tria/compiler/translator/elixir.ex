@@ -1,12 +1,22 @@
 defmodule Tria.Compiler.ElixirTranslator do
 
   @moduledoc """
-  Elixir to Tria translator.
-  Expands macros and quote
-  Removes `&` captures
-  Expands aliases, etc
+  # Elixir to Tria translator.
 
-  #TODO from_tria traverse closures to captures
+  ## Tria language
+
+  Tria is designed to simplify AST manipulations in Elixir.
+
+  Tria is different from Elixir in these things:
+  * No macros and `quote`-s
+  * No `&` captures
+  * No aliases
+  * No local calls
+  * No `rescue` in `try`
+  * `after` in `receive` is twople instead of right arrow
+
+  These changes add some rules and remove some exceptions to make
+  reasoning about language simpler. For example, in `left -> right` left is always pattern and right is always body
   """
 
   @behaviour Tria.Compiler.Translator
@@ -15,8 +25,11 @@ defmodule Tria.Compiler.ElixirTranslator do
 
   import Tria.Language
   import Tria.Language.Tri
+  import Tria.Language.Meta
+  import Tria.Language.Codebase, only: [empty_env: 0]
 
   alias Tria.Language.Codebase
+  alias Tria.Language.Guard
 
   @tri_opts [to_tria: false]
 
@@ -26,7 +39,7 @@ defmodule Tria.Compiler.ElixirTranslator do
   Translates Elixir AST to Tria AST, raising
   """
   @impl true
-  def to_tria!(ast, env) do
+  def to_tria!(ast, env \\ empty_env()) do
     {ast, _env} = expand_all(ast, env)
     ast
   rescue
@@ -39,7 +52,7 @@ defmodule Tria.Compiler.ElixirTranslator do
   Translates Elixir AST to Tria AST, non-raising
   """
   @impl true
-  def to_tria(ast, env) do
+  def to_tria(ast, env \\ empty_env()) do
     {ast, env} = expand_all(ast, env)
     {:ok, ast, env}
   end
@@ -55,6 +68,21 @@ defmodule Tria.Compiler.ElixirTranslator do
       {name, meta, counter} when is_integer(counter) ->
         {name, [{:counter, counter} | meta], nil}
 
+      # Translate fn to &capture/arity
+      {:fn, _, [{:"->", _, [args1, dot_call(module, function, args2)]}]}  = the_fn ->
+        if unmeta(args1) == unmeta(args2) do
+          quote do: &unquote(module).unquote(function)/unquote(length args1)
+        else
+          the_fn
+        end
+
+      {:try, meta, [clauses]} ->
+        clauses = try_to_elixir(clauses)
+        {:try, meta, [clauses]}
+
+      {:receive, meta, [[do: body, after: {timeout, after_body}]]} ->
+        {:receive, meta, [[do: body, after: [{:"->", [], [[timeout], after_body]}]]]}
+
       other ->
         other
     end)
@@ -63,15 +91,9 @@ defmodule Tria.Compiler.ElixirTranslator do
   @doc """
   Returns full module atom from an alias
   """
-  @spec unalias(Macro.t()) :: module()
+  @spec unalias(Macro.t()) :: module() | Macro.t()
   def unalias({:__aliases__, meta, names} = ast) when is_aliases(ast) do
-    the_alias = meta[:alias]
-
-    if the_alias do
-      the_alias
-    else
-      Module.concat(names)
-    end
+    if the_alias = meta[:alias], do: the_alias, else: Module.concat(names)
   end
   def unalias(other), do: other
 
@@ -329,6 +351,13 @@ defmodule Tria.Compiler.ElixirTranslator do
         {left, _env}  = expand_all(left,  env)
         {right, _env} = expand_all(right, env)
         {{:when, meta, [left, right]}, env}
+
+      # Receive
+      {:receive, meta, [[do: body, after: [{:"->", _, [[timeout], after_body]}]]]} ->
+        {body, _env} = expand_all(body, env)
+        {timeout, env} = expand_all(timeout, env)
+        {after_body, env} = expand_all(after_body, env)
+        {{:receive, meta, [[do: body, after: {timeout, after_body}]]}, env}
 
       # Calls
       dot_call(subject, function, args) ->
@@ -808,8 +837,91 @@ defmodule Tria.Compiler.ElixirTranslator do
     end
   end
 
-  #FIXUP twople represented as tuple
-  # defp {:"{}", _meta, [left, ight]}), do: {left, right}
-  # defp maybe_twople(other), do: other
+  ### Tria to Elixir translation
+
+  defp try_to_elixir(clauses) do
+    Enum.flat_map(clauses, fn
+      {:catch, clauses} -> catch_to_elixir(clauses)
+      other -> [other]
+    end)
+  end
+
+  defp catch_to_elixir(clauses) when is_list(clauses) do
+    {catch_clauses, rescue_clauses} =
+      clauses
+      |> Enum.map(fn {:"->", meta, [pattern, body]} ->
+        # inspect_ast(pattern, label: :pattern)
+        {guards, pattern} = Guard.pop_guard(pattern)
+        case pattern do
+          # Case where exception is an erlang exception wrapped into elixir's exception structure
+          # Just like erlang's `undef` means the same as Elixir's `UndefinedFunctionError`
+          [:error, exception] when is_variable(exception) ->
+            case extract_exceptions guards do
+              # Clause for `any -> body` style exceptions
+              [] ->
+                body = denormalize_catch_body(body, exception)
+                {nil, {:"->", meta, [[exception], body]}}
+
+              exceptions ->
+                rescue_pattern = [quote do: unquote(exception) in unquote(exceptions)]
+                body = denormalize_catch_body(body, exception)
+                {nil, {:"->", meta, [rescue_pattern, body]}}
+            end
+
+          [:throw, pattern] ->
+            {{:"->", meta, [Guard.append_guard([pattern], guards), body]}, nil}
+
+          [kind, pattern] ->
+            {{:"->", meta, [Guard.append_guard([kind, pattern], guards), body]}, nil}
+
+          _ ->
+            {{:"->", meta, [Guard.append_guard([pattern], guards), body]}, nil}
+        end
+
+      end)
+      |> Enum.unzip()
+
+    catch_clauses = Enum.reject(catch_clauses, &is_nil/1)
+    rescue_clauses = Enum.reject(rescue_clauses, &is_nil/1)
+
+    Enum.reject([rescue: rescue_clauses, catch: catch_clauses], &match?({_, []}, &1))
+  end
+
+  defp denormalize_catch_body(body, exception) do
+    case body do
+      # First clause, where erlang's exception is normalized
+      (tri do
+        x = tri dot_call(Exception, :normalize, _)
+        tri_splicing block
+      end) ->
+        {:__block__, [], [tri(x = exception) | block]}
+
+      # Second clause where we don't use exception in `rescue`, therefore
+      # there is no normalisation
+      other ->
+        other
+    end
+  end
+
+  defp extract_exceptions(tri left when right) do
+    # This concatenation is okay here, because it is not deep
+    extract_exceptions(left) ++ extract_exceptions(right)
+  end
+
+  defp extract_exceptions(ast) do
+    case ast do
+      {{:., _, [:erlang, :andalso]}, _, [
+        {{:., _, [Kernel, :==]}, _, [
+          {{:., _, [:erlang, :map_get]}, _, [:__struct__, _]},
+          exception
+        ]},
+        {{:., _, [:erlang, :map_get]}, _, [:__exception__, _]}
+      ]} ->
+        [exception]
+
+      _ ->
+        []
+    end
+  end
 
 end

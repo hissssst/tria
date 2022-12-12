@@ -1,6 +1,12 @@
 defmodule Tria.TestHelpers do
 
+  import Tria.Language, warn: false
   require Tria.Language.Tri, as: Tri
+
+  def last_line({:__block__, _, lines}) do
+    last_line List.last lines
+  end
+  def last_line(other), do: other
 
   defmacro assert_unique(list) do
     quote bind_quoted: [list: list] do
@@ -10,8 +16,18 @@ defmodule Tria.TestHelpers do
   end
 
   defmacro assert_tri(arg, opts \\ [], do: code) do
+    pattern =
+      code
+      |> Tri.do_tri(opts, %{__CALLER__ | context: :match})
+      |> prewalk(fn
+        #FIXME https://github.com/elixir-lang/elixir/issues/12296
+        {:{}, _, [:__block__, _, [line]]} -> line
+        {:{}, _, [:__aliases__, _, modules]} -> Module.concat(modules)
+        other -> other
+      end)
+
     quote do
-      assert unquote(Tri).tri(unquote(opts), unquote(code)) = unquote(arg)
+      assert unquote(pattern) = unquote(arg)
     end
   end
 

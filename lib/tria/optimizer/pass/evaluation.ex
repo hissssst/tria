@@ -25,12 +25,17 @@ defmodule Tria.Optimizer.Pass.Evaluation do
     # Results of the evaluation are stored here
     hit: false,
     used: %{},
-    evaluated: MapSet.new()
+    defined: MapSet.new(),
+    evaluated: MapSet.new(),
   ]
 
   ## Public API
 
   def run_while(ast, opts \\ []) do
+    Process.sleep(100)
+    IO.puts ""
+    inspect_ast(ast, label: :result, with_contexts: true)
+    IO.puts ""
     case run_once(ast, opts) do
       {:ok, new_ast} ->
         run_while(new_ast, opts)
@@ -66,7 +71,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   defmacrop hit(state) do
     quote do
       Tracer.tag(unquote(__CALLER__.line), label: :hit_at)
-      # IO.inspect(unquote(__CALLER__.line), label: :hit_at)
+      IO.inspect(unquote(__CALLER__.line), label: :hit_at)
       %{unquote(state) | hit: true}
     end
   end
@@ -77,6 +82,8 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   Evaluation runner for general normal context
   """
   def run(ast, state) do
+    inspect_ast(ast, label: :ast, with_contexts: true)
+    Process.sleep(100)
     case ast do
       # Breakpoint
       breakpoint(point) ->
@@ -115,7 +122,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
           Enum.flat_map_reduce(lines, state, fn line, state ->
             {line, state} = run(line, state)
             case line do
-              {:__block__, _, lines} -> { lines, hit(state) }
+              {:__block__, _, lines} -> { lines, hit state }
               other -> {[other], state}
             end
           end)
@@ -123,7 +130,6 @@ defmodule Tria.Optimizer.Pass.Evaluation do
         {last_line, lines} = List.pop_at(lines, -1)
         {lines, state} =
           Enum.flat_map_reduce(lines, state, fn line, state ->
-            #TODO we can remove from block anything pure without definitions
             cond do
               match?({:=, _, _}, line) ->
                 {[line], state}
@@ -132,8 +138,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
                 {[], hit state}
 
               is_pure(line) ->
-                #TODO We just hope that the binds will be in the correct order
-                #FIXME fails when called upon something containing `fn` inside
+                # Binds must be in the correct order
                 {_, binds} =
                   prewalk(line, [], fn
                     tri(_key = value) = match, acc when is_fn(value) ->
@@ -148,6 +153,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
                     other, acc ->
                       {other, acc}
                   end)
+
                 {:lists.reverse(binds), hit state}
 
               true ->
@@ -170,10 +176,12 @@ defmodule Tria.Optimizer.Pass.Evaluation do
         {clauses, clauses_state} = run_clauses(clauses, state)
         { {:receive, meta, [[do: clauses]]}, state <~> clauses_state }
 
-      {:receive, meta, [[do: clauses, after: after_clauses]]} ->
+      {:receive, meta, [[do: clauses, after: {timeout, body}]]} ->
         {clauses, clauses_state} = run_clauses(clauses, state)
-        {after_clauses, after_state} = run_clauses(after_clauses, state)
-        { {:receive, meta, [[do: clauses, after: after_clauses]]}, state <~> clauses_state <~> after_state }
+        {timeout, timeout_state} = run(timeout, state)
+        {body, body_state} = run(body, timeout_state)
+        state = state <~> clauses_state <~> body_state
+        { {:receive, meta, [[do: clauses, after: {timeout, body}]]}, state }
 
       # Case
       {:case, meta, [arg, [do: clauses]]} ->
@@ -305,7 +313,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
           {:ok, the_fn} when is_fn(the_fn) ->
             # Since we propagate the `fn`, we'll need to retranslate it
             # To preserve the static assignment form
-            the_fn = SSATranslator.from_tria(the_fn)
+            the_fn = SSATranslator.from_tria!(the_fn)
             { the_fn, hit state }
 
           {:ok, other} ->
@@ -334,11 +342,11 @@ defmodule Tria.Optimizer.Pass.Evaluation do
         { {call, meta, args}, state }
 
       # Sanity checks
-      variable when is_variable(variable, :_) ->
-        raise "Came across underscore in normal context"
+      # variable when is_variable(variable, :_) ->
+      #   raise "Came across underscore in normal context"
 
-      tri ^_ ->
-        raise "Came across pin in normal context"
+      # tri ^_ ->
+      #   raise "Came across pin in normal context"
 
       # Literals
       other ->
@@ -370,7 +378,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
         body =
           bindings
           |> Enum.flat_map(fn {key, value} ->
-            if quoted_literal?(value) or is_variable(value), do: [], else: [tri(key = value)]
+            if vared_literal?(value), do: [], else: [{:=, [], [key, value]}]
           end)
           |> case do
             [] -> body
@@ -517,32 +525,6 @@ defmodule Tria.Optimizer.Pass.Evaluation do
           {body, body_state} = run(body, state)
           {{do_or_after, body}, acc_state <~> body_state}
 
-        {:rescue, clauses}, acc_state ->
-          {clauses, acc_state} =
-            Enum.map_reduce(clauses, acc_state, fn {:"->", arrowmeta, [[pattern], body]}, acc_state ->
-              case pattern do
-                {:in, inmeta, [variable, exception]} ->
-                  {variable, pattern_state} = run_match(variable, state)
-                  {body, body_state} = run(body, state <~ pattern_state)
-                  {{:"->", arrowmeta, [[{:in, inmeta, [variable, exception]}], body]}, acc_state <~> body_state}
-
-                tri %_{} ->
-                  {body, body_state} = run(body, state)
-                  {{:"->", arrowmeta, [[pattern], body]}, acc_state <~> body_state}
-
-                variable when is_variable(variable) ->
-                  {variable, pattern_state} = run_match(variable, state)
-                  {body, body_state} = run(body, state <~ pattern_state)
-                  {{:"->", arrowmeta, [[variable], body]}, acc_state <~> body_state}
-
-                exception when is_atom(exception) ->
-                  {body, body_state} = run(body, state)
-                  {{:"->", arrowmeta, [[exception], body]}, acc_state <~> body_state}
-              end
-            end)
-
-          {{:rescue, clauses}, acc_state}
-
         {catch_or_else, clauses}, acc_state when catch_or_else in ~w[catch else]a ->
           {clauses, acc_state} = run_clauses(clauses, acc_state)
           {{catch_or_else, clauses}, acc_state}
@@ -611,8 +593,9 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   defp equal?(left, right), do: unmeta(left) == unmeta(right)
 
   defp precomputable?(dot_call(module, function, args) = dc, _state) when is_atom(module) and is_atom(function) do
+    alias Tria.Language.Analyzer.Purity
     with(
-      true <- Enum.all?(args, &quoted_literal?/1),
+      true <- Enum.all?(args, &vared_literal?/1),
       false <- Purity.check_analyze(dc)
     ) do
       match? {:pure, _, _}, Purity.run_analyze(dc)
@@ -666,8 +649,15 @@ defmodule Tria.Optimizer.Pass.Evaluation do
     %{state | bindings: Bindmap.put(bindings, pairs)}
   end
 
-  defp put_bind(%{bindings: bindings} = state, key, value) do
-    %{state | bindings: Bindmap.put(bindings, key, value)}
+  defp put_bind(%{bindings: bindings, defined: defined} = state, key, value) do
+    key = unmeta key
+    {_, defined} =
+      prewalk(key, defined, fn
+        var, defined when is_variable(var) -> {var, MapSet.put(defined, var)}
+        other, defined -> {other, defined}
+      end)
+
+    %{state | bindings: Bindmap.put(bindings, key, value), defined: defined}
   end
 
   defp put_evaluated(%{evaluated: evaluated} = state, call) do

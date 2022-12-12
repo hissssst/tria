@@ -27,213 +27,246 @@ defmodule Tria.Compiler.AbstractTranslatorTest do
     end
   end
 
-  describe "`rescue` retranslation" do
-    test "x in Error" do
-      abstract do
-        try do
-          1
-        rescue
-          x in ArgumentError -> x
-        end
-      end
-      |> to_tria!()
-      |> assert_tri do
-        try do
-          1
-        rescue
-          tri(:in, _, [underscore, ArgumentError]) ->
-            x = underscore
-            x
-        end
-      end
-    end
+  # describe "`rescue` retranslation" do
+  #   test "All-in-one" do
+  #     abstract do
+  #       try do
+  #         1
+  #       rescue
+  #         x in ArgumentError -> x
+  #         x in [ArgumentError, UndefinedError] -> x
+  #         UndefinedError -> :undefined
+  #         other -> other
+  #       catch
+  #         :exit, e -> e
+  #         :error, :badarith -> :bad
+  #         other -> other
+  #       end
+  #     end
+  #     |> to_tria!()
+  #     |> inspect_ast(label: :result, with_contexts: true)
+  #     |> Tria.Compiler.ElixirTranslator.from_tria()
+  #     |> inspect_ast(label: :result, with_contexts: true)
+  #   end
 
-    test "Error" do
-      abstract do
-        try do
-          1
-        rescue
-          ArgumentError -> 2
-        end
-      end
-      |> to_tria!()
-      |> assert_tri do
-        try do
-          1
-        rescue
-          tri(:in, _, [_underscore, ArgumentError]) -> 2
-        end
-      end
-    end
+  #   test "x in Error" do
+  #     abstract do
+  #       try do
+  #         1
+  #       rescue
+  #         x in ArgumentError -> x
+  #       end
+  #     end
+  #     |> to_tria!()
+  #     |> inspect_ast(label: :result, with_contexts: true)
+  #     |> assert_tri do
+  #       try do
+  #         1
+  #       rescue
+  #         tri(:in, _, [underscore, ArgumentError]) ->
+  #           x = underscore
+  #           x
+  #       end
+  #     end
+  #   end
 
-    test "Throw" do
-      abstract do
-        try do
-          1
-        catch
-          x -> x
-        end
-      end
-      |> to_tria!()
-      |> assert_tri do
-        try do
-          1
-        catch
-          x -> x
-        end
-      end
-    end
+  #   test "Error" do
+  #     abstract do
+  #       try do
+  #         1
+  #       rescue
+  #         ArgumentError -> 2
+  #       end
+  #     end
+  #     |> to_tria!()
+  #     |> assert_tri do
+  #       try do
+  #         1
+  #       rescue
+  #         tri(:in, _, [_underscore, ArgumentError]) -> 2
+  #       end
+  #     end
+  #   end
 
-    test "Non-erlang Error" do
-      abstract do
-        try do
-          1
-        rescue
-          URI.Error -> 2
-        end
-      end
-      |> to_tria!()
-      |> assert_tri do
-        try do
-          1
-        rescue
-          tri(:in, _, [_underscore, URI.Error])-> 2
-        end
-      end
-    end
+  #   test "Throw" do
+  #     abstract do
+  #       try do
+  #         1
+  #       catch
+  #         x -> x
+  #       end
+  #     end
+  #     |> to_tria!()
+  #     |> assert_tri do
+  #       try do
+  #         1
+  #       catch
+  #         x -> x
+  #       end
+  #     end
+  #   end
 
-    test "No errors" do
-      abstract do
-        try do
-          1
-        rescue
-          _ -> 2
-        end
-      end
-      |> to_tria!()
-      |> assert_tri do
-        try do
-          1
-        rescue
-          tri(name, meta, context) -> 2
-        end
-      end
+  #   test "Non-erlang Error" do
+  #     abstract do
+  #       try do
+  #         1
+  #       rescue
+  #         URI.Error -> 2
+  #       end
+  #     end
+  #     |> to_tria!()
+  #     |> assert_tri do
+  #       try do
+  #         1
+  #       rescue
+  #         _ in URI.Error -> 2
+  #       end
+  #     end
+  #   end
 
-      assert is_atom name
-      assert is_list meta
-      assert is_context context
-    end
+  #   test "No errors" do
+  #     abstract do
+  #       try do
+  #         1
+  #       rescue
+  #         _ -> 2
+  #       end
+  #     end
+  #     |> to_tria!()
+  #     |> assert_tri do
+  #       try do
+  #         1
+  #       rescue
+  #         tri(name, meta, context) -> 2
+  #       end
+  #     end
 
-    test "__STACKTRACE__" do
-      abstract do
-        try do
-          1
-        rescue
-          _ -> IO.inspect __STACKTRACE__
-        end
-      end
-      |> to_tria!()
-      |> assert_tri do
-        try do
-          1
-        rescue
-          _ -> IO.inspect tri(:__STACKTRACE__, meta, context)
-        end
-      end
+  #     assert is_atom name
+  #     assert is_list meta
+  #     assert is_context context
+  #   end
 
-      assert is_list meta
-      assert is_context context
-    end
+  #   test "__STACKTRACE__" do
+  #     abstract do
+  #       try do
+  #         1
+  #       rescue
+  #         _ -> IO.inspect __STACKTRACE__
+  #       end
+  #     end
+  #     |> to_tria!()
+  #     |> assert_tri do
+  #       try do
+  #         1
+  #       rescue
+  #         _ -> IO.inspect tri(:__STACKTRACE__, meta, context)
+  #       end
+  #     end
 
-    test "Multiple errors" do
-      abstract do
-        try do
-          1
-        rescue
-          e in [ArithmeticError, ArgumentError, URI.Error] -> e
-        end
-      end
-      |> to_tria!()
-      |> assert_tri do
-        try do
-          1
-        rescue
-          underscore in [ArithmeticError, ArgumentError, URI.Error] ->
-            e = underscore
-            e
-        end
-      end
-    end
+  #     assert is_list meta
+  #     assert is_context context
+  #   end
 
-    test "Kinds" do
-      abstract do
-        try do
-          1
-        catch
-          :exit, reason ->
-            {:exited_with, reason}
+  #   test "Multiple errors" do
+  #     abstract do
+  #       try do
+  #         1
+  #       rescue
+  #         e in [ArithmeticError, ArgumentError, URI.Error] -> e
+  #       end
+  #     end
+  #     |> to_tria!()
+  #     |> assert_tri do
+  #       try do
+  #         1
+  #       rescue
+  #         underscore in [ArithmeticError, ArgumentError, URI.Error] ->
+  #           e = underscore
+  #           e
+  #       end
+  #     end
+  #   end
 
-          kind, reason ->
-            {kind, reason}
-        end
-      end
-      |> to_tria!()
-      |> unmeta()
-      |> assert_tri do
-        try do
-          1
-        catch
-          :exit, reason ->
-            {:exited_with, reason}
+  #   test "Kinds" do
+  #     abstract do
+  #       try do
+  #         1
+  #       catch
+  #         :exit, reason ->
+  #           {:exited_with, reason}
 
-          kind, reason2 ->
-            {kind, reason2}
-        end
-      end
-    end
+  #         kind, reason ->
+  #           {kind, reason}
+  #       end
+  #     end
+  #     |> to_tria!()
+  #     |> unmeta()
+  #     |> assert_tri do
+  #       try do
+  #         1
+  #       catch
+  #         :exit, reason ->
+  #           {:exited_with, reason}
 
-    test "Else" do
-      abstract do
-        try do
-          1
-        catch
-          x -> x
-        else
-          1 -> 2
-          3 -> 4
-        end
-      end
-      |> to_tria!()
-      |> assert_tri do
-        try do
-          1
-        catch
-          x -> x
-        else
-          1 -> 2
-          3 -> 4
-        end
-      end
-    end
+  #         kind, reason2 ->
+  #           {kind, reason2}
+  #       end
+  #     end
+  #   end
 
-    test "After" do
-      abstract do
-        try do
-          1
-        after
-          2
-        end
-      end
-      |> to_tria!()
-      |> assert_tri do
-        try do
-          1
-        after
-          2
-        end
-      end
-    end
-  end
+  #   test "Else" do
+  #     abstract do
+  #       try do
+  #         1
+  #       catch
+  #         x -> x
+  #       else
+  #         1 -> 2
+  #         3 -> 4
+  #       end
+  #     end
+  #     |> to_tria!()
+  #     |> assert_tri do
+  #       try do
+  #         1
+  #       catch
+  #         x -> x
+  #       else
+  #         1 -> 2
+  #         3 -> 4
+  #       end
+  #     end
+  #   end
+
+  #   test "After" do
+  #     abstract do
+  #       try do
+  #         1
+  #       after
+  #         2
+  #       end
+  #     end
+  #     |> to_tria!()
+  #     |> assert_tri do
+  #       try do
+  #         1
+  #       after
+  #         2
+  #       end
+  #     end
+  #   end
+
+  #   test "Catch stays" do
+  #     abstract do
+  #       try do
+  #         1
+  #       catch
+  #         :error, :badarg -> :ok
+  #       end
+  #     end
+  #     |> to_tria!()
+  #   end
+  # end
 
   describe "Pins" do
     test "Simple" do

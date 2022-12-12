@@ -189,4 +189,16 @@ defmodule Tria.Language.Guard do
     # end)
   end
 
+  @spec append_guard([Tria.t()], Tria.t() | nil) :: [Tria.t()]
+  def append_guard(args, nil), do: args
+  def append_guard(args, guard) do
+    [{:when, [], args ++ [guard]}]
+  end
+
+  @spec pop_guard([Tria.t()]) :: {guard :: Tria.t(), args :: Tria.t()}
+  def pop_guard([{:when, _meta, args_and_guard}]) do
+    List.pop_at(args_and_guard, -1)
+  end
+  def pop_guard(args), do: {nil, args}
+
 end

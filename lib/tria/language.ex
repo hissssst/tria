@@ -5,6 +5,7 @@ defmodule Tria.Language do
   """
 
   import Tria.Language.Binary
+  alias Tria.Compiler.SSATranslator
 
   # These special forms are variables, but they can be assigned to, only used
   @special_vars ~w[__CALLER__ __DIR__ __ENV__ __MODULE__ __STACKTRACE__]a
@@ -551,6 +552,9 @@ defmodule Tria.Language do
 
   @type context :: nil | :guard | :match
 
+  @doc """
+  Prewalks the context
+  """
   @spec context_prewalk(Tria.t(), (Tria.t(), context() -> Tria.t()), context()) :: Tria.t()
   def context_prewalk(ast, func, context) do
     {ast, _} = context_prewalk(ast, [], fn ast, _acc, ctx -> {func.(ast, ctx), []} end, context)
@@ -625,6 +629,13 @@ defmodule Tria.Language do
       end)
 
     filtered
+  end
+
+  ### High-level helpers
+
+  def undefined_vars(ast) do
+    {_, %{undefined: undefined}} = SSATranslator.from_tria(ast)
+    undefined
   end
 
 end

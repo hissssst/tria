@@ -10,9 +10,15 @@ defmodule Tria.Compiler.SSATranslator do
   import Tria.Language.Meta
 
   defstruct [
-    pin_known: false,
+    pin_known:    false,
     translations: %{}
   ]
+
+  @typedoc """
+  - `:pin_known` -- For translating from Erlang, since it has no pins for variables
+  and does not support shadowing for anything except `fun`s
+  """
+  @type option :: {:pin_known, false}
 
   # Public
 
@@ -25,13 +31,19 @@ defmodule Tria.Compiler.SSATranslator do
   end
 
   @doc """
-  Because Tria.SSA is a subset of Tria
-  no translation is required
+  Creates Single static assignment form of Tria language
+  """
+  def from_tria!(ast, opts \\ []) do
+    {ssa_form_ast, _} = from_tria(ast, opts)
+    ssa_form_ast
+  end
+
+  @doc """
+  Creates Single static assignment form of Tria language and
+  also returns a state of SSATranslator after traversal
   """
   def from_tria(ast, opts \\ []) do
-    state = %__MODULE__{pin_known: Keyword.get(opts, :pin_known, false)}
-    {ssa_form_ast, _} = run(ast, state)
-    ssa_form_ast
+    run(ast, %__MODULE__{pin_known: Keyword.get(opts, :pin_known, false)})
   end
 
   # Main recursive function
@@ -59,11 +71,26 @@ defmodule Tria.Compiler.SSATranslator do
         clauses = run_clauses(clauses, translations)
         { {:receive, meta, [[do: clauses]]}, translations }
 
-      {:receive, meta, [[do: clauses, after: [{:"->", after_meta, [[left], right]}]]]} ->
+      {:receive, meta, [[do: clauses, after: {left, right}]]} ->
         clauses = run_clauses(clauses, translations)
         {left, left_translations} = run(left, translations)
         {right, _} = run(right, left_translations)
-        { {:receive, meta, [[do: clauses, after: [{:"->", after_meta, [[left], right]}]]]}, translations }
+        { {:receive, meta, [[do: clauses, after: {left, right}]]}, translations }
+
+      # Try
+      {:try, meta, [parts]} ->
+        parts =
+          Enum.map(parts, fn
+            {do_after, body} when do_after in ~w[do after]a ->
+              {body, _} = run(body, translations)
+              {do_after, body}
+
+            {else_catch, clauses} when else_catch in ~w[else catch]a ->
+              clauses = run_clauses(clauses, translations)
+              {else_catch, clauses}
+          end)
+
+        { {:try, meta, [parts]}, translations }
 
       # Cond
       {:cond, meta, [[do: clauses]]} ->

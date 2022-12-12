@@ -12,24 +12,27 @@ defmodule Tria.Compiler.AbstractTranslator do
 
   import Tria.Language, except: [pin: 1, pin: 2]
   import Tria.Language.Tri
+  import Tria.Language.Codebase, only: [empty_env: 0]
   alias Tria.Debug.Tracer
   alias Tria.Language.Codebase
   alias Tria.Compiler.ElixirTranslator
   alias Tria.Compiler.SSATranslator
 
-  def to_tria!(abstract, env \\ __ENV__) do
-    {:ok, tria, _} = to_tria(abstract, env)
+  def to_tria!(abstract, opts \\ []) do
+    {:ok, tria, _} = to_tria(abstract, opts)
     tria
   end
 
-  def to_tria(abstract, env \\ __ENV__)
+  def to_tria(abstract, opts \\ [])
   def to_tria(abstract, %Macro.Env{} = env) do
     to_tria(abstract, env: env)
   end
   def to_tria(abstract, opts) when is_list(opts) do
     to_tria(abstract, Map.new opts)
   end
-  def to_tria(abstract, %{env: env} = opts) do
+  def to_tria(abstract, opts) do
+    env = Map.get_lazy(opts, :env, &empty_env/0)
+
     traverse_function =
       if is_list(abstract) and opts[:as_block] do
         &traverse_block/1
@@ -65,7 +68,7 @@ defmodule Tria.Compiler.AbstractTranslator do
       # We call translation to SSA, because actually
       # Erlang is not statically assigned. `fun()` arguments
       # actually shadow existing variables
-      {:ok, SSATranslator.from_tria(tria, pin_known: true), env}
+      {:ok, SSATranslator.from_tria!(tria, pin_known: true), env}
     end
   end
 
@@ -289,7 +292,7 @@ defmodule Tria.Compiler.AbstractTranslator do
         # Erlang is not statically assigned. `fun()` arguments shadow
         # existing variables
         |> ElixirTranslator.to_tria!(__ENV__)
-        |> SSATranslator.from_tria(pin_known: true)
+        |> SSATranslator.from_tria!(pin_known: true)
         |> ElixirTranslator.from_tria()
 
       {:named_fun, _anno, _name, _clauses} ->
@@ -368,50 +371,18 @@ defmodule Tria.Compiler.AbstractTranslator do
   # So, this functions translates these `catch` clauses back to rescue
   # There are 3 different cases which are translated differently into Elixir errors
   defp traverse_try_clauses(clauses) when is_list(clauses) do
-    {catch_clauses, rescue_clauses} =
-      clauses
-      |> traverse()
-      |> Enum.map(fn {:"->", meta, [[pattern], body]} ->
-        # inspect_ast(pattern, label: :pattern)
-        case pattern do
-          # Case where exception is an erlang exception wrapped into elixir's exception structure
-          # Just like erlang's `undef` means the same as Elixir's `UndefinedFunctionError`
-          tri {:error, exception, stacktrace} when guards ->
-            exceptions = list_unwrap extract_exceptions(guards)
-            rescue_pattern = [quote do: unquote(exception) in unquote(exceptions)]
-            body =
-              body
-              |> denormalize_catch_body(exception)
-              |> replace_stacktrace(stacktrace)
-            {nil, {:"->", meta, [rescue_pattern, body]}}
+    clauses
+    |> traverse()
+    |> Enum.map(fn {:"->", meta, [[pattern], body]} ->
+      case pattern do
+        tri {type, exception, stacktrace} when guards ->
+          {:"->", meta, [[{:when, [], [type, exception, guards]}], replace_stacktrace(body, stacktrace)]}
 
-          # Third clause for `any -> body` style exceptions
-          tri {:error, exception, stacktrace} ->
-            body =
-              body
-              |> denormalize_catch_body(exception)
-              |> replace_stacktrace(stacktrace)
-            {nil, {:"->", meta, [[exception], body]}}
-
-          tri {:throw, pattern, stacktrace} ->
-            body = replace_stacktrace(body, stacktrace)
-            {{:"->", meta, [[pattern], body]}, nil}
-
-          tri {kind, pattern, stacktrace} ->
-            body = replace_stacktrace(body, stacktrace)
-            {{:"->", meta, [[kind, pattern], body]}, nil}
-
-          _ ->
-            {{:"->", meta, [pattern, body]}, nil}
-        end
-
-      end)
-      |> Enum.unzip()
-
-    catch_clauses = Enum.reject(catch_clauses, &is_nil/1)
-    rescue_clauses = Enum.reject(rescue_clauses, &is_nil/1)
-
-    Enum.reject([rescue: rescue_clauses, catch: catch_clauses], &match?({_, []}, &1))
+        tri {type, exception, stacktrace} ->
+          {:"->", meta, [[type, exception], replace_stacktrace(body, stacktrace)]}
+      end
+    end)
+    |> then(fn x -> [catch: x] end)
   end
 
   ### Variables
@@ -555,50 +526,11 @@ defmodule Tria.Compiler.AbstractTranslator do
     {:try, meta, [parts]}
   end
 
-  defp denormalize_catch_body(body, exception) do
-    case body do
-      # First clause, where erlang's exception is normalized
-      (tri do
-        x = tri dot_call(Exception, :normalize, _)
-        tri_splicing(block)
-      end) ->
-        {:__block__, [], [tri(x = exception) | block]}
-
-      # Second clause where we don't use exception in `rescue`, therefore
-      # there is no normalisation
-      other ->
-        other
-    end
-  end
-
   defp replace_stacktrace(body, {name, _, context}) do
     prewalk(body, fn
       {^name, _, ^context} -> quote do: __STACKTRACE__
       other -> other
     end)
-  end
-
-  defp extract_exceptions(ast) do
-    case ast do
-      tri(
-        :erlang.map_get(:__struct__, _) == exception
-        and :erlang.map_get(:__exception__, _)
-      ) ->
-        [exception]
-
-      tri(
-        :erlang.map_get(:__struct__, _) == exception
-        and :erlang.map_get(:__exception__, _)
-        when tail
-      ) ->
-        [exception | extract_exceptions(tail)]
-
-      tri(_ when tail) ->
-        extract_exceptions(tail)
-
-      _ ->
-        []
-    end
   end
 
   ### Metadata

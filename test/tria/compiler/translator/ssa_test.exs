@@ -18,7 +18,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
           x = 1
           fn %{old_x: ^x, x: x = _} when :erlang.is_atom(x) -> x end
         end
-        |> SSATranslator.from_tria()
+        |> SSATranslator.from_tria!()
 
       assert_tri code do
         x1 = 1
@@ -38,7 +38,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
           x = {x, y}
           y = {x, x}
         end
-        |> SSATranslator.from_tria()
+        |> SSATranslator.from_tria!()
 
       assert_tri code do
         x1 = 1
@@ -58,7 +58,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
           x = (x = 1; x = 2; 3)
           x
         end
-        |> SSATranslator.from_tria()
+        |> SSATranslator.from_tria!()
 
       assert_tri code do
         x1 = 0
@@ -74,7 +74,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
         tri do
           {x, x, [x, x]} = x
         end
-        |> SSATranslator.from_tria()
+        |> SSATranslator.from_tria!()
 
       assert_tri code do
         {x2, x2, [x2, x2]} = x1
@@ -95,7 +95,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
             _ -> {x, y}
           end
         end
-        |> SSATranslator.from_tria()
+        |> SSATranslator.from_tria!()
 
       assert_tri code do
         x1 = y
@@ -119,7 +119,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
             _ -> {x, y}
           end).( (x = 2; x) )
         end
-        |> SSATranslator.from_tria()
+        |> SSATranslator.from_tria!()
 
       assert_tri code do
         x1 = y
@@ -147,7 +147,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
             _ -> x
           end
         end
-        |> SSATranslator.from_tria()
+        |> SSATranslator.from_tria!()
 
       assert_tri code do
         x1 = y
@@ -173,7 +173,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
         s = <<something :: binary-size(x)>>
         <<x :: binary-size(x), x :: binary-size(1)>> = s
       end
-      |> SSATranslator.from_tria()
+      |> SSATranslator.from_tria!()
       |> assert_tri do
         x1 = 1
         s = <<something :: binary-size(x1)>>
@@ -188,7 +188,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
         x = 0
         <<x :: 8, y :: binary-size(x)>> = <<1, 2>>
       end
-      |> SSATranslator.from_tria()
+      |> SSATranslator.from_tria!()
       |> assert_tri do
         x1 = 0
         <<x2 :: 8, y :: tri {:-, _, [{:binary, _, _}, {:size, _, [x2]}]}>> = <<1, 2>>
@@ -202,7 +202,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
         binary = 1
         <<x :: 8, y :: binary-size(8)>> = <<1, 2>>
       end
-      |> SSATranslator.from_tria()
+      |> SSATranslator.from_tria!()
       |> assert_tri do
         binary1 = 1
         <<x :: 8, y :: binary-size(8)>> = <<1, 2>>
@@ -219,7 +219,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
         x = 0
         x = 1
       end
-      |> SSATranslator.from_tria(pin_known: true)
+      |> SSATranslator.from_tria!(pin_known: true)
       |> assert_tri do
         x = 0
         ^x = 1
@@ -232,7 +232,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
         x = 1
         y = [x]
       end
-      |> SSATranslator.from_tria(pin_known: true)
+      |> SSATranslator.from_tria!(pin_known: true)
       |> assert_tri do
         x = 0
         ^x = 1
@@ -253,7 +253,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
             x = 2
         end
       end
-      |> SSATranslator.from_tria(pin_known: true)
+      |> SSATranslator.from_tria!(pin_known: true)
       |> assert_tri do
         case x1 do
           :first_clause ->
@@ -279,7 +279,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
             :other
         end
       end
-      |> SSATranslator.from_tria(pin_known: true)
+      |> SSATranslator.from_tria!(pin_known: true)
       |> assert_tri do
         case something do
           x when Kernel.==(x, false) when Kernel.==(x, nil) ->

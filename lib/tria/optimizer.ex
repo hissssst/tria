@@ -10,7 +10,7 @@ defmodule Tria.Optimizer do
   @spec run(Macro.t(), Keyword.t()) :: Macro.t()
   def run(quoted, opts \\ []) do
     quoted
-    |> SSATranslator.from_tria()
+    |> SSATranslator.from_tria!()
     |> run_while(opts)
   end
 

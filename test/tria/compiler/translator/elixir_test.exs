@@ -426,4 +426,81 @@ defmodule Tria.Compiler.ElixirTranslatorTest do
     end
   end
 
+  describe "from_tria/2" do
+    test "Variable" do
+      assert {:var, [counter: 123, line: 1], nil} == ElixirTranslator.from_tria({:var, [line: 1], 123})
+    end
+
+    test "Receive" do
+      tri do
+        receive do
+          x -> x
+          after 10 -> 10
+        end
+      end
+      |> ElixirTranslator.to_tria!()
+      |> assert_tri do
+        receive do
+          x -> x
+          after {10, 10}
+        end
+      end
+      |> ElixirTranslator.from_tria()
+      |> assert_tri do
+        receive do
+          x -> x
+          after 10 -> 10
+        end
+      end
+    end
+
+    test "Try" do
+      abstract do
+        try do
+          1
+        rescue
+          x in ArgumentError -> x
+          x in [ArgumentError, UndefinedError] -> x
+          UndefinedError -> :undefined
+          other -> other
+        catch
+          :exit, e -> e
+          :error, :badarith -> :bad
+          other -> other
+        end
+      end
+      |> Tria.Compiler.AbstractTranslator.to_tria!(as_block: true)
+      |> assert_tri do
+        try do
+          1
+        catch
+          _, _ when _ -> _
+          _, _ when _ -> _
+          _, _ when _ -> _
+
+          _, _ -> _
+
+          _, _ -> _
+          _, _ -> _
+          _, _ -> _
+        end
+      end
+      |> ElixirTranslator.from_tria()
+      |> assert_tri do
+        try do
+          1
+        rescue
+          _ in [ArgumentError] -> _
+          _ in [ArgumentError, UndefinedError] -> _
+          _ in [UndefinedError] -> :undefined
+          _ -> _
+        catch
+          :exit, e -> e
+          :error, :badarith -> :bad
+          other2 -> other2
+        end
+      end
+    end
+  end
+
 end

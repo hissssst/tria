@@ -13,6 +13,7 @@ defmodule Tria.Language.Tri do
 
   import Tria.Language
   alias Tria.Compiler.ElixirTranslator
+  alias Tria.Compiler.SSATranslator
 
   @typedoc """
   Options for `tri/2` macro
@@ -23,7 +24,8 @@ defmodule Tria.Language.Tri do
   `:meta` - whether meta field should be empty in pattern or in AST
   """
   @type option :: {:debug, atom()}
-  | {:to_tria, boolean()}
+  | {:to_tria, :force | true | false}
+  | {:to_ssa, boolean()}
   | {:isolate, boolean()}
   | {:meta, boolean()}
 
@@ -65,7 +67,7 @@ defmodule Tria.Language.Tri do
     do_tri(code, opts, __CALLER__)
   end
 
-  defp do_tri(code, opts, env) do
+  def do_tri(code, opts, env) do
     opts = get_defaults(opts, env)
     if Macro.Env.in_match?(env) do
       to_pattern(code, opts, env)
@@ -83,16 +85,22 @@ defmodule Tria.Language.Tri do
 
   defp to_pattern(quoted, opts, env) do
     quoted
+    |> then(fn quoted ->
+      case opts[:to_tria] do
+        :force -> ElixirTranslator.to_tria!(quoted)
+        _ -> quoted
+      end
+    end)
     |> Macro.escape(prune_metadata: true, unquote: true)
-    |> then(fn x ->
+    |> then(fn escaped ->
       unless opts[:isolate] do
-        Macro.prewalk(x, &maybe_unescape_variable/1)
+        prewalk(escaped, &maybe_unescape_variable/1)
       else
-        x
+        escaped
       end
     end)
     |> traverse(env)
-    |> maybe_translate(env, opts)
+    |> maybe_untranslate(env, opts)
   end
 
   defp to_quote(code, opts, %Macro.Env{versioned_vars: versioned_vars} = env) do
@@ -101,7 +109,9 @@ defmodule Tria.Language.Tri do
     |> Macro.escape()
     |> then(fn x ->
       unless opts[:isolate] do
-        Macro.prewalk(x, & maybe_unescape_variable(&1, versioned_vars))
+        # opts[:debug] && IO.inspect versioned_vars, label: :versioned_vars
+        # opts[:debug] && IO.inspect x, label: :x
+        prewalk(x, & maybe_unescape_variable(&1, versioned_vars))
       else
         x
       end
@@ -120,9 +130,22 @@ defmodule Tria.Language.Tri do
 
   defp maybe_translate(code, env, opts) do
     if Keyword.get(opts, :to_tria, true) do
-      ElixirTranslator.to_tria!(code, env)
+      tria = ElixirTranslator.to_tria!(code, env)
+      if Keyword.get(opts, :to_ssa, true) do
+        SSATranslator.from_tria! tria
+      else
+        tria
+      end
     else
       code
+    end
+  end
+
+  defp maybe_untranslate(tria, env, opts) do
+    if Keyword.get(opts, :to_tria, true) do
+      ElixirTranslator.from_tria(tria, env)
+    else
+      tria
     end
   end
 
@@ -179,16 +202,20 @@ defmodule Tria.Language.Tri do
 
   ## Unescapes variables
 
-  defp maybe_unescape_variable({:{}, _, [n, m, c]}) when is_elixir_variable({n, m, c}) do
+  defp maybe_unescape_variable({:{}, _, [n, m, c]}) when is_variable({n, m, c}) do
     {n, m, c}
   end
   defp maybe_unescape_variable(other), do: other
 
-  defp maybe_unescape_variable({:{}, _, [n, m, c]} = original, versioned_vars) when is_elixir_variable({n, m, c}) do
+  defp maybe_unescape_variable({:{}, _, [n, m, c]} = original, versioned_vars) when is_variable({n, m, c}) do
     name_context = {n, c}
+    name_nil = {n, nil}
     case versioned_vars do
       %{^name_context => _} ->
         {n, m, c}
+
+      %{^name_nil => _} ->
+        {n, m, nil}
 
       _ ->
         original

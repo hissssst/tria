@@ -9,6 +9,9 @@ An optimizing compiler for elixir
 ## Known problems
 Phoenix router compilation fails because of improper list somewhere
 
+receive's `after` right-arrow clause is special
+`try`'s `rescue` right-arrow clause is special too
+
 ## Overview
 TODO
 
@@ -35,7 +38,7 @@ And varibles can have integer in context field
 
 [x] Tria -> Elixir
 [x] Elixir -> Tria
-[x] ATF -> Tria. Kinda, needs testing
+[x] ATF -> Tria
 [ ] Tria -> ATF (actually don't need this, but it can be useful for erlangers)
 
 [x] Tria->SSA, SSA->Tria
@@ -76,7 +79,7 @@ when I need it
 
 [x] Purity check by xref
 
-[ ] Separate the tables:
+[x] Separate the tables:
 `pure_cache` local cache during compilation
 `pure_roots` nifs and stuff from internal libraries
 

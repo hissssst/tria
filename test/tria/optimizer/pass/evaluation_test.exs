@@ -8,22 +8,15 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
   alias Tria.Optimizer.Pass.Evaluation, as: Evaluation
   alias Tria.Compiler.SSATranslator
 
-  @tri_opts meta: false
+  @tri_opts meta: false, to_ssa: true
 
   # Does this even work in elixir?
   @compile :nowarn_unused_vars
   @compile {:nowarn_unused_vars, true}
 
   defp run_while(ast, opts \\ []) do
-    ast
-    |> SSATranslator.from_tria()
-    |> Evaluation.run_while(opts)
+    Evaluation.run_while(ast, opts)
   end
-
-  defp last_line({:__block__, [], lines}) do
-    last_line List.last lines
-  end
-  defp last_line(other), do: other
 
   describe "Structural evaluation" do
     test "Block joining" do
@@ -227,7 +220,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
           z -> z
         end
       end
-      |> run_while(remove_unused: false)
+      |> run_while() #remove_unused: false)
       |> inspect_ast(label: :result, with_contexts: true)
       |> assert_tri do
         x2 = (x1 = 1; y1 = 2)
@@ -537,6 +530,32 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         |> run_while()
 
       assert 4 == evaluated
+    end
+  end
+
+  describe "Fn inlining" do
+    test "constant" do
+      tri do
+        (fn x -> send(pid, x) end).(123)
+      end
+      |> run_while()
+      |> assert_tri do
+        Kernel.send(_pid, 123)
+      end
+    end
+
+    test "variable" do
+      tri do
+        send(pid, y)
+        (fn x -> send(pid, x) end).(y)
+      end
+      |> inspect_ast(with_contexts: true, label: :before)
+      |> run_while()
+      |> inspect_ast(with_contexts: true, label: :result)
+      |> assert_tri do
+        Kernel.send(pid, y)
+        Kernel.send(pid, y)
+      end
     end
   end
 
@@ -1069,7 +1088,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       |> assert_tri do
         {with_key, without_key} =
           Enum.split_with(list, fn {key, _} ->
-            :maps.is_key(key, %{__struct__: S, x: 1})
+            :maps.is_key(key, %{__struct__: tri(S), x: 1})
           end)
       end
 
