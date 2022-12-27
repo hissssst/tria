@@ -45,6 +45,44 @@ defmodule Tria.Language.Binary do
      and length(element(t, 2)) == 1
 
   @doc """
+  Traverses inputs of the binary (all except type specifications types)
+  Basically, this means that every part of AST which can be defined by variable
+  """
+  @spec traverse_binary_inputs(Tria.t(), state(), traverse_func()) :: {Tria.t(), state()}
+  def traverse_binary_inputs({:<<>>, meta, parts}, state, func) do
+    {parts, state} =
+      Enum.map_reduce(parts, state, fn
+        {:"::", meta, [value, specifier]}, state ->
+          {value, state} = func.(value, state)
+          {specifier, state} = traverse_specifier(specifier, state, func)
+          { {:"::", meta, [value, specifier]}, state }
+
+        value, state ->
+          func.(value, state)
+      end)
+
+    { {:<<>>, meta, parts}, state }
+  end
+
+  @doc """
+  Traverses items (without type specifications) of binary
+  """
+  @spec traverse_binary_items(Tria.t(), state(), traverse_func()) :: {Tria.t(), state()}
+  def traverse_binary_items({:<<>>, meta, parts}, state, func) do
+    {parts, state} =
+      Enum.map_reduce(parts, state, fn
+        {:"::", meta, [value, specifier]}, state ->
+          {value, state} = func.(value, state)
+          { {:"::", meta, [value, specifier]}, state }
+
+        value, state ->
+          func.(value, state)
+      end)
+
+    { {:<<>>, meta, parts}, state }
+  end
+
+  @doc """
   Traverses type specifications of binary
   """
   @spec traverse_binary_specifiers(Tria.t(), state(), traverse_func()) :: {Tria.t(), state()}

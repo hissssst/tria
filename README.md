@@ -1,52 +1,79 @@
 # Tria
 
-!!! Think about replacing `defmodule` and `def` to my own macro
-It is easy to replace them
-Hard part is to be compatible with compilation hooks, attributes and stuff
-
 An optimizing compiler for elixir
 
-## Known problems
-Phoenix router compilation fails because of improper list somewhere
+---
 
-receive's `after` right-arrow clause is special
-`try`'s `rescue` right-arrow clause is special too
+## Alpha version roadmap
 
-## Overview
-TODO
+The purpose of this iteration is to find the silliest design flaws and problems
+before publishing this project to open source
 
-## Milestones
+### Known problems
 
-[x] Compiles my project
+[ ] raising lines removed. Needs to be reworked
+
+[FIXED] Protocols are broken, I don't know why
+
+[ ] Guards checking
+
+### Pre public alpha tasks
+
+[x] EnumFusion testing
+
+[x] Tria.Optimizer pipeline testing
+
+[x] Purity check tests
+
+[ ] Deduplication of mfarity
+
+[ ] Raising check implementation
+
+[ ] Raising check tests
+
+[ ] Raising check integration to Evaluation pass
+
+[ ] Tria.Optimizer assurance tests
+Tests which just check that original code
+returns the same thing as the optimized code
+
+### Alpha milestones
+
+[x] Compiles any project
 
 [x] Passes tests on some external project correctly
 
-[x] Passes tests on some big external project correctly
+[ ] Passes tests on some big external project correctly
 
-[x] Passes tests on phoenix
+[ ] Passes tests on phoenix
 
-# Roadmap
+---
 
-Project consists of several parts
+## How it works
 
-### Tria language
+Compiler calls elixir's compiler which generates beam,
+with all compile-time stuff resolved. Compiler then
+exctracts abstract code (debug info) from modules and
+translates it to Tria. Tria is then optimized and then
+translated back to Elixir which is then compiled to beam
+for the last time
 
-A special language for manipulating Elixir's AST
+## Tria language
 
-No imports, requires, macro
+This is a specification for internal IR
+
+No imports, requires, macro, alias and anything like this
 And varibles can have integer in context field
 
 [x] Tria -> Elixir
 [x] Elixir -> Tria
 [x] ATF -> Tria
-[ ] Tria -> ATF (actually don't need this, but it can be useful for erlangers)
-
+[ ] Tria -> ATF
 [x] Tria->SSA, SSA->Tria
 
 ### Compiler
 
 `Mix.Task.Compiler`-compatible compiler.
-And ability to inline optimizers
 
 Basic idea is to compile modules into context modules
 This means that modules are divided into groups
@@ -56,7 +83,6 @@ while original modules delegate the this separate module
 [x] `Tria.tria` and `Tria.run` functions and macro
 
 [x] Task interface
-Just prepends `use Tria` to every module
 
 [ ] `use Tria, context: context`
 Needs testing on big projects
@@ -67,13 +93,15 @@ Needs testing on big projects
 
 [x] Purity check providers
 
+[x] Raise checking
+
+[ ] Move `Tria.Language.Tri` to separate project
+
 [ ] Tria annotations
 
 [ ] Module generation Infrastructure
 I want to create a module and pass functions into it
 when I need it
-
-[ ] Callgraph
 
 ### Purity checking
 
@@ -127,7 +155,8 @@ Optimize this to unpack map in one place
 
 ### Enum optimizers
 
-[ ] Join maps
-If they're pure inside
+[x] Joinings
 
-[ ] Moving Enum sequence to generated `defp`
+[x] Map.new
+
+[ ] to `:lists`

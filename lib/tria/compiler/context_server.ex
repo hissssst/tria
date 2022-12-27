@@ -129,7 +129,6 @@ defmodule Tria.Compiler.ContextServer do
         unquote_splicing funcs
       end
     end
-    |> inspect_ast(label: :g, with_contexts: true)
     |> Compiler.compile_quoted("#{state.name}.ex")
   end
 
@@ -144,14 +143,20 @@ defmodule Tria.Compiler.ContextServer do
       fname = Compiler.fname(signature)
 
       clauses =
-        Tracer.with_local_trace({module, name, arity}, fn ->
-          the_fn
-          |> Tracer.tag_ast(label: :before_passes)
-          |> Optimizer.run()
-          |> contextify_local_calls(definitions)
-          |> Tracer.tag_ast(label: :generating)
-          |> Compiler.fn_to_clauses()
-        end)
+        try do
+          Tracer.with_local_trace({module, name, arity}, fn ->
+            the_fn
+            |> Tracer.tag_ast(label: :before_passes)
+            |> Optimizer.run()
+            |> contextify_local_calls(definitions)
+            |> Tracer.tag_ast(label: :generating)
+            |> Compiler.fn_to_clauses()
+          end)
+        rescue
+          e ->
+            IO.puts "Failed generation for #{module}.#{name}/#{arity}"
+            reraise e, __STACKTRACE__
+        end
 
       create_definition(kind, fname, clauses)
     end)

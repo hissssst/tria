@@ -21,12 +21,14 @@ defmodule Tria.Language.Bindmap do
   import Tria.Language.Guard
   import Tria.Language.Meta, only: [unmeta: 1]
 
-  def new(), do: %{}
+  alias Tria.Language.Matchlist
 
   @doc """
   Checks if bindmap contains no bindings
   """
   defguard is_empty(bindmap) when map_size(bindmap) == 0
+
+  def new(), do: %{}
 
   @spec put(t(), key(), value()) :: t()
   def put(bindmap, key, value) do
@@ -55,6 +57,15 @@ defmodule Tria.Language.Bindmap do
     with {:ok, value} <- fetch(bindmap, key) do
       {:ok, unfold(value, bindmap, opts)}
     end
+  end
+
+  @spec merge_matchlist(t(), Matchlist.t()) :: t()
+  def merge_matchlist(bindmap, matchlist) do
+    matchlist
+    |> Enum.reverse()
+    |> Enum.reduce(bindmap, fn {key, value}, bindmap ->
+      put(bindmap, key, value)
+    end)
   end
 
   # @spec unfold_once(Tria.t(), t()) ::

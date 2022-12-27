@@ -6,8 +6,9 @@ defmodule Tria.Language.Analyzer.Purity.TTYProvider do
   asked at a time
   """
 
-  import Tria.Language, only: [ast_to_string: 1]
+  import Tria.Language
   alias Tria.Language.Analyzer.Purity.Provider
+  alias Tria.Language.Codebase
 
   @behaviour Provider
 
@@ -35,15 +36,14 @@ defmodule Tria.Language.Analyzer.Purity.TTYProvider do
 
   @impl GenServer
   def handle_call({:is_pure, mfa, opts}, _, state) do
-    result = ask(mfa, opts[:stack])
+    result = ask(mfa, Enum.into(opts, %{stack: [], show: nil}))
     {:reply, result, state}
   end
 
-  defp ask(string, stack) do
-    string
-    |> prompt(stack)
+  defp ask(mfa, %{stack: stack} = opts) do
+    mfa
+    |> prompt(opts)
     |> IO.gets()
-    |> String.downcase()
     |> String.codepoints()
     |> List.first()
     |> case do
@@ -55,19 +55,23 @@ defmodule Tria.Language.Analyzer.Purity.TTYProvider do
 
       "s" when not is_empty(stack) ->
         Enum.each(stack, fn {m, f, a} -> IO.puts "#{m}.#{f}/#{a}" end)
-        ask(string, stack)
+        ask(mfa, opts)
+
+      "S" ->
+        inspect_ast Codebase.fetch_tria(mfa), label: :show
+        ask(mfa, opts)
 
       _ ->
-        ask(string, stack)
+        ask(mfa, opts)
     end
   end
 
-  defp prompt({m, f, a}, stack) when is_empty(stack) do
-    "===\n#{ast_to_string {{:".", [], [m, f]}, [], a}}\n===\nIs pure [y(yes); n(no)] "
+  defp prompt({m, f, a}, %{stack: stack}) when not is_empty(stack) do
+    "\n#{ast_to_string {{:".", [], [m, f]}, [], a}}\n\nIs pure [y(yes); n(no); S(show); s(stack)] "
   end
 
   defp prompt({m, f, a}, _) do
-    "===\n#{ast_to_string {{:".", [], [m, f]}, [], a}}\n===\nIs pure [y(yes); n(no); s(stack)] "
+    "\n#{ast_to_string {{:".", [], [m, f]}, [], a}}\n\nIs pure [y(yes); n(no); S(show)] "
   end
 
 end

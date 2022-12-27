@@ -29,6 +29,7 @@ defmodule Tria.TestHelpers do
     quote do
       assert unquote(pattern) = unquote(arg)
     end
+    |> Macro.prewalk(fn x -> Macro.update_meta(x, & [{:generated, true} | &1]) end)
   end
 
   defmacro abstract(do: body) do
@@ -36,6 +37,8 @@ defmodule Tria.TestHelpers do
     quoted =
       quote do
         defmodule unquote(name) do
+          @compile :debug_info
+          @compile :nowarn_unused_vars
           def f do
             unquote(body)
           end

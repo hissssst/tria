@@ -9,7 +9,7 @@ defmodule Tria.Compiler.SSATranslatorTest do
 
   alias Tria.Compiler.SSATranslator
 
-  @tri_opts meta: false
+  @tri_opts meta: false, to_ssa: false
 
   describe "Regression" do
     test "fn clause map match" do

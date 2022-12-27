@@ -7,23 +7,34 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
   #TODO translate `Enum.into(list, %{})` to `Map.new()`
   """
 
-  # Variable `eos` in this module means `enum_or_stream`
+  # `eos` in this module means `enum_or_stream`
 
   @common_ops ~w[filter reject map reduce sum count product frequencies flat_map foldl foldr]a
   @list_returning_op ~w[filter reject map concat]a
 
   import Tria.Language
   import Tria.Language.Tri
-  alias Tria.Language.Analyzer
+  import Tria.Language.Analyzer, only: [is_pure: 1]
   alias Tria.Optimizer.Pass.Evaluation
   alias Tria.Compiler.SSATranslator
+  alias Tria.Debug.Tracer
 
   defguard is_fusable(module, function, arity)
            when module == Enum or module == Stream
            or (module == Map and function == :new)
            or (module == :lists and function == :reverse and arity == 1)
 
+  defguard is_eos(eos) when eos in [Enum, Stream]
+
   @tri_opts meta: false
+
+  defmacrop hit do
+    line = __CALLER__.line
+    quote do
+      Tracer.tag(unquote(line), label: :fusion_hit_at)
+      Process.put(:hit, true)
+    end
+  end
 
   def run_once!(ast, opts \\ []) do
     {:ok, ast} = run_once(ast, opts)
@@ -33,7 +44,7 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
   def run_while(ast, opts \\ []) do
     {argument, steps} = unchain(ast)
     steps = do_run_while(steps, opts)
-    chain(argument, steps)
+    finish(argument, steps)
   end
 
   defp do_run_while(steps, opts) do
@@ -52,7 +63,7 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
     {argument, steps} = unchain(ast)
     case run_pipeline(steps, opts) do
       {steps, true} ->
-        {:ok, chain(argument, steps)}
+        {:ok, finish(argument, steps)}
 
       {_, false} ->
         {:error, :nothing_to_fuse}
@@ -60,7 +71,7 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
   end
 
   defp run_pipeline(steps, _opts) do
-    at_hit fn ->
+    with_pdict [hit: false], fn ->
       steps
       |> reducify()
       |> unreject()
@@ -68,6 +79,10 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
       |> join_consecutive()
       |> into_to_map_new()
     end
+  end
+
+  defp finish(argument, steps) do
+    chain(argument, steps)
   end
 
   ### Converts `reject` to `filter`
@@ -119,7 +134,7 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
   end
   def reducify([]), do: []
 
-  ### Joining of two same calls
+  ## Joining of two same calls
 
   ### zip + reduce to zip_reduce
   def join_consecutive([{_, :zip, []}, {Enum, :reduce, [acc, reducer]} | tail]) do
@@ -128,8 +143,8 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
   end
 
   ### Pairs of mappers, filters etc.
-  def join_consecutive([{left_eos, left_op, [left]}, {right_eos, right_op, [right]} | tail]) do
-    if left_eos == Stream or is_pure(left) or is_pure(right) do
+  def join_consecutive([{left_eos, left_op, [left]}, {right_eos, right_op, [right]} | tail]) when is_eos(left_eos) and is_eos(right_eos) do
+    if left_eos == Stream or is_pure_fn(left) or is_pure_fn(right) do
       case {left_op, right_op} do
         # Same ops
         {:filter, :filter} ->
@@ -137,10 +152,10 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
           body = evaluate tri fn x -> left.(x) && right.(x) end
           [{right_eos, :filter, [body]} | join_consecutive(tail)]
 
-        {:map, :map} ->
+        {:map, right_op} when right_op in ~w[map flat_map each filter]a ->
           hit()
           body = evaluate tri fn x -> right.(left.(x)) end
-          [{right_eos, :map, [body]} | join_consecutive(tail)]
+          [{right_eos, right_op, [body]} | join_consecutive(tail)]
 
         {:flat_map, :flat_map} ->
           hit()
@@ -152,12 +167,6 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
           # I don't think this optimization hits at least once
           body = evaluate tri fn x -> Enum.drop(x, left + right) end
           [{right_eos, :drop, [body]} | join_consecutive(tail)]
-
-        # Each
-        {:map, :each} ->
-          hit()
-          body = evaluate tri fn x -> right.(left.(x)) end
-          [{right_eos, :each, [body]} | join_consecutive(tail)]
 
         {:filter, :each} ->
           hit()
@@ -174,7 +183,7 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
 
   ### Joining with reduce
   def join_consecutive([{eos, op, [func]}, {Enum, :reduce, [accumulator, reducer]} = step | tail]) do
-    if is_pure(accumulator) and (is_pure(func) or is_pure(reducer)) do
+    if eos == Stream or (is_pure(accumulator) and (is_pure_fn(func) or is_pure_fn(reducer))) do
       case op do
         :map ->
           hit()
@@ -188,7 +197,7 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
 
         :flat_map ->
           hit()
-          body = evaluate tri fn x, acc -> Enum.reduce(x, acc, reducer) end
+          body = evaluate tri fn x, acc -> Enum.reduce(func.(x), acc, reducer) end
           [{Enum, :reduce, [accumulator, body]} | join_consecutive(tail)]
 
         _ ->
@@ -222,30 +231,27 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
     end
   end
 
-  ### Last steps
-  # def join_consecutive([{eos, left_op, [func], {Enum, right_op, []}}]) do
-  #   case {left_op, right_op} do
-  #     {:filter, :empty?} ->
-  #       hit()
-  #       if is_pure(func) do
-  #         [{Enum, :find, [func]}]
-  #       else
-  #         [{Enum, :filter, [func], {Enum, :empty?, []}}]
-  #       end
+  ### with Map.new
+  def join_consecutive([{eos, :map, [left]} = first, {Map, :new, [right]} = second | tail]) when is_eos(eos) do
+    if eos == Stream or is_pure_fn(left) do
+      func = evaluate tri fn x -> right.(left.(x)) end
+      [{Map, :new, [func]} | join_consecutive(tail)]
+    else
+      [first | join_consecutive([second | tail])]
+    end
+  end
 
-  #     _ ->
-  #       [{eos, left_op, [func], {Enum, right_op, []}}]
-  #   end
-  # end
+  def join_consecutive([{eos, :map, [left]}, {Map, :new, []} | tail]) when is_eos(eos) do
+    func = evaluate tri fn x -> left.(x) end
+    [{Map, :new, [func]} | join_consecutive(tail)]
+  end
+
+  ### Other
   def join_consecutive([head | tail]), do: [head | join_consecutive(tail)]
   def join_consecutive([]), do: []
 
-  ### Enum.into(_, %{}) to Map.new
+  ## Enum.into(_, %{}) to Map.new
 
-  def into_to_map_new([{Enum, :map, [func]}, {Enum, :into, [tri(%{})]} | tail]) do
-    hit()
-    [{Map, :new, [func]} | into_to_map_new(tail)]
-  end
   def into_to_map_new([{Enum, :into, [tri(%{}), func]} | tail]) do
     hit()
     [{Map, :new, [func]} | into_to_map_new(tail)]
@@ -257,7 +263,15 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
   def into_to_map_new([head | tail]), do: [head | into_to_map_new(tail)]
   def into_to_map_new([]), do: []
 
-  ### Chaining and unchaining
+  ## Loop unrolling
+
+  # #TODO
+  # def unroll(list, [{Enum, :map, [func]} | tail]) when is_list(list) do
+
+  # end
+  # def unroll(argument, steps), do: {argument, steps}
+
+  ## Chaining and unchaining
 
   defp unchain(chain, acc \\ [])
   defp unchain(dot_call(eos, function, [subj | args]), acc) when is_fusable(eos, function, length(args) + 1) do
@@ -272,7 +286,7 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
   end
   defp chain(arg, []), do: arg
 
-  ### Evalution and Analysis helper
+  ## Evalution and Analysis helper
 
   defp evaluate(ast) do
     ast
@@ -280,21 +294,11 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
     |> Evaluation.run_while()
   end
 
-  defp is_pure({:fn, _, [clauses]}) do
-    Analyzer.is_pure(clauses)
+  defp is_pure_fn({:fn, _, [clauses]}) do
+    is_pure(clauses)
   end
-  defp is_pure(other), do: Analyzer.is_pure(other)
+  defp is_pure_fn(_), do: false
 
   ### Hitting and stuff
-
-  defp hit, do: Process.put(:hit, true)
-  defp at_hit(func) do
-    old = Process.get(:hit)
-    try do
-      {func.(), Process.get(:hit, false)}
-    after
-      old && Process.put(:hit, old) || Process.delete(:hit)
-    end
-  end
 
 end

@@ -114,6 +114,12 @@ defmodule Tria.Language.FunctionRepo do
     GenServer.call(start(), :traits) ++ @persistent_traits
   end
 
+  def remove_by(trait, opts) do
+    trait
+    |> select_by(opts)
+    |> Enum.each(fn {key, _} -> :ets.delete(trait, key) end)
+  end
+
   # GenServer callbacks
 
   def init(_opts) do

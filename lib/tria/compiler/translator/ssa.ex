@@ -16,7 +16,7 @@ defmodule Tria.Compiler.SSATranslator do
 
   @typedoc """
   - `:pin_known` -- For translating from Erlang, since it has no pins for variables
-  and does not support shadowing for anything except `fun`s
+  and does not support shadowing for anything except arguments in `fun`s
   """
   @type option :: {:pin_known, false}
 
@@ -36,19 +36,41 @@ defmodule Tria.Compiler.SSATranslator do
   def from_tria!(ast, opts \\ []) do
     {ssa_form_ast, _} = from_tria(ast, opts)
     ssa_form_ast
+  rescue
+    x ->
+      inspect_ast(ast, label: :failed)
+      reraise x, __STACKTRACE__
   end
 
   @doc """
   Creates Single static assignment form of Tria language and
   also returns a state of SSATranslator after traversal
   """
-  def from_tria(ast, opts \\ []) do
+  def from_tria(ast, opts \\ [])
+  def from_tria([{:"->", _, _}] = clauses, opts) do
+    with {{:fn, _, clauses}, translations} <- from_tria({:fn, [], clauses}, opts) do
+      {clauses, translations}
+    end
+  end
+  def from_tria(ast, opts) do
     run(ast, %__MODULE__{pin_known: Keyword.get(opts, :pin_known, false)})
   end
 
   # Main recursive function
   defp run(code, translations) do
     case code do
+      # Variable
+      {_, meta, _} = variable when is_variable(variable) ->
+        case fetch_translation(translations, variable) do
+          {:ok, replacement} ->
+            {with_meta(replacement, meta), translations}
+
+          :error ->
+            # It appears that the variableiable is undefined
+            # And we just leave it be
+            {variable, translations}
+        end
+
       # Block
       {:__block__, meta, lines} ->
         {lines, translations} = Enum.map_reduce(lines, translations, &run/2)
@@ -218,18 +240,6 @@ defmodule Tria.Compiler.SSATranslator do
         {dot, dot_translations} = run(dot, translations)
         { {:., dotmeta, dot}, dot_translations }
 
-      # Variable
-      {_, meta, _} = variable when is_variable(variable) ->
-        case fetch_translation(translations, variable) do
-          {:ok, replacement} ->
-            {with_meta(replacement, meta), translations}
-
-          :error ->
-            # It appears that the variableiable is undefined
-            # And we just leave it be
-            {variable, translations}
-        end
-
       # Calls and forms
       {caller, meta, args} ->
         {caller, caller_translations} = run(caller, translations)
@@ -272,6 +282,34 @@ defmodule Tria.Compiler.SSATranslator do
 
   def propagate_to_pattern(code, translations, new_translations \\ %__MODULE__{}) do
     case code do
+      # Variable
+      {:_, _, _} = underscore when is_variable(underscore) ->
+        # We SSA underscores to avoid situations where code analyzer doesn't know about underscores
+        {unify(underscore), new_translations}
+
+      {_, meta, _} = variable when is_variable(variable) ->
+        {new_variable, new_new_translations} =
+          case fetch_translation(new_translations, variable) do
+            :error ->
+              # It appears that it is the new variable
+              new_variable = unify(variable)
+              {new_variable, put_translation(new_translations, variable, new_variable)}
+
+            {:ok, variable} ->
+              # It appears that the variable is present multiple times in the pattern
+              {with_meta(variable, meta), new_translations}
+          end
+
+        key = unmeta variable
+        case translations do
+          %__MODULE__{pin_known: true, translations: %{^key => value}} ->
+            pinned = pin with_meta(value, meta)
+            {pinned, new_translations}
+
+          _ ->
+            {new_variable, new_new_translations}
+        end
+
       # Binary matching is special because pinning is not required for variables in types
       {:"<<>>", meta, items} ->
         {items, new_translations} =
@@ -309,33 +347,6 @@ defmodule Tria.Compiler.SSATranslator do
 
           {:ok, val} ->
             {pin(val, meta), new_translations}
-        end
-
-      # Variable
-      {:_, _, _} = underscore when is_variable(underscore) ->
-        {underscore, new_translations}
-
-      {_, meta, _} = variable when is_variable(variable) ->
-        {new_variable, new_new_translations} =
-          case fetch_translation(new_translations, variable) do
-            :error ->
-              # It appears that it is the new variable
-              new_variable = unify(variable)
-              {new_variable, put_translation(new_translations, variable, new_variable)}
-
-            {:ok, variable} ->
-              # It appears that the variable is present multiple times in the pattern
-              {with_meta(variable, meta), new_translations}
-          end
-
-        key = unmeta variable
-        case translations do
-          %__MODULE__{pin_known: true, translations: %{^key => value}} ->
-            pinned = pin with_meta(value, meta)
-            {pinned, new_translations}
-
-          _ ->
-            {new_variable, new_new_translations}
         end
 
       # Map or Tuple or Binary or matchable operator <>

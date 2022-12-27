@@ -8,16 +8,10 @@ defmodule Tria.Language.Codebase do
 
   # We explicitly define this function first in the module
   # to avoid garbage in enviroment
-  @doc """
-  Returns empty enviroment for given module
-  """
-  @spec empty_env(module() | nil) :: Macro.Env.t()
-  def empty_env(module \\ nil) do
-    %Macro.Env{__ENV__ | module: module, file: "nofile", line: 0, versioned_vars: %{}, function: nil}
-  end
 
   import Tria.Language
 
+  alias Tria.Language.MFArity
   alias Tria.Language.FunctionRepo
   alias Tria.Compiler.AbstractTranslator
 
@@ -94,22 +88,18 @@ defmodule Tria.Language.Codebase do
   """
   @spec fetch_tria(mfargs()) :: Tria.t() | nil
   def fetch_tria(mfa) do
-    {module, _name, _arity} = arityfy mfa
+    {module, _name, _arity} = MFArity.to_mfarity(mfa)
     with nil <- FunctionRepo.lookup(mfa, :tria) do
       case fetch_abstract(mfa) do
-        nil ->
-          nil
-
+        nil -> nil
         abstract ->
-          {:ok, tria, _} = AbstractTranslator.to_tria(abstract, empty_env(module))
-          tria = {:fn, [], tria}
-          FunctionRepo.insert(mfa, :tria, tria)
-          tria
+          clauses = AbstractTranslator.to_tria!(abstract, env: empty_env(module))
+          FunctionRepo.insert(mfa, :tria, {:fn, [], clauses})
       end
     end
   rescue
     e ->
-      IO.inspect(arityfy(mfa), label: :failed_abstract_translation_of)
+      MFArity.inspect(mfa, label: :failed_abstract_translation_of)
       reraise e, __STACKTRACE__
   end
 

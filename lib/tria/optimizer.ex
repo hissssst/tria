@@ -2,7 +2,9 @@ defmodule Tria.Optimizer do
 
   import Tria.Language, only: [inspect_ast: 2], warn: false
   alias Tria.Compiler.SSATranslator
+  alias Tria.Debug.Tracer
   alias Tria.Optimizer.Pass.Evaluation
+  alias Tria.Optimizer.Pass.EnumFusion
 
   @doc """
   This same as `tria/1` macro, but as a function.
@@ -11,17 +13,19 @@ defmodule Tria.Optimizer do
   def run(quoted, opts \\ []) do
     quoted
     |> SSATranslator.from_tria!()
+    |> Tracer.tag_ast(label: :optimizer_after_ssa)
     |> run_while(opts)
+  rescue
+    e ->
+      inspect_ast(quoted, label: :failed_run_for)
+      reraise e, __STACKTRACE__
   end
 
   defp run_while(ast, opts) do
-    case Evaluation.run_once(ast) do
-      {:ok, ast} ->
-        run_while(ast, opts)
-
-      {:error, :nothing_to_evaluate} ->
-        ast
-    end
+    ast
+    |> Evaluation.run_while(opts)
+    # |> EnumFusion.run_while()
+    # |> Evaluation.run_while()
   end
 
 end

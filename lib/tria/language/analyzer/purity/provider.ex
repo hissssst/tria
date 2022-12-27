@@ -7,14 +7,15 @@ defmodule Tria.Language.Analyzer.Purity.Provider do
   """
 
   alias Tria.Language.Analyzer.Purity.TTYProvider
+  alias Tria.Language.MFArity
 
   @type opts :: Keyword.t()
 
   @doc "Returns if the Module.function is pure. Args and opts are passed just for info"
-  @callback is_pure({atom(), atom(), [Tria.t()]}, opts) :: true | false
+  @callback is_pure(MFArity.mfargs(), opts) :: true | false
 
-  @spec is_pure({atom(), atom(), [Tria.t()]}, opts) :: true | false
-  def is_pure(mfacall, opts), do: default_analyzer().is_pure(mfacall, opts)
+  @spec is_pure(MFArity.mfargs(), opts) :: true | false
+  def is_pure(mfargs, opts), do: default_analyzer().is_pure(mfargs, opts)
 
   defp default_analyzer() do
     with nil <- :persistent_term.get(__MODULE__, nil), do: TTYProvider

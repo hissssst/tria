@@ -58,6 +58,9 @@ defmodule Tria.Debug.Breakpoint do
   defp vars(%Macro.Env{versioned_vars: versioned_vars}) do
     versioned_vars
     |> Enum.map(fn
+      {{name, {context, counter}}, _} ->
+        {name, [counter: counter], context}
+
       {{name, counter}, _} when is_integer(counter) ->
         {name, [counter: counter], nil}
 

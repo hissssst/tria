@@ -25,6 +25,11 @@ defmodule Tria.Language.Ternary do
   def l && r when :no in [l, r] and is_ternary(l) and is_ternary(r), do: :no
   def l && r when is_ternary(l) and is_ternary(r), do: :maybe
 
+  def d || d when is_ternary(d), do: d
+  def l || r when :yes in [l, r] and is_ternary(l) and is_ternary(r), do: :yes
+  def l || r when is_ternary(l) and is_ternary(r), do: :maybe
+
+  def greater?(:yes, :yes), do: false
   def greater?(:yes, _), do: true
   def greater?(:maybe, :no), do: true
   def greater?(_, _), do: false

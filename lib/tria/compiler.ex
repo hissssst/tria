@@ -4,15 +4,6 @@ defmodule Tria.Compiler do
   Interface for compiling Elixir mix projects.
   """
 
-  defp env(module, file) do
-    %Macro.Env{__ENV__ |
-      context: nil,
-      versioned_vars: %{},
-      module: module,
-      file: file
-    }
-  end
-
   @typedoc """
   Kind of definition
   """
@@ -50,7 +41,12 @@ defmodule Tria.Compiler do
   alias Tria.Debug.Tracer
   alias Tria.Language.Codebase
 
-  # Project compilation pipeline
+  @special_functions [__info__: 1, __struct__: 2, __struct__: 1, __impl__: 1]
+
+  defguard is_special(function, arity) when
+    {function, arity} in @special_functions
+
+  ## Project compilation pipeline
 
   @typedoc """
   Options for compiling Elixir project
@@ -119,7 +115,7 @@ defmodule Tria.Compiler do
     docs = fetch_docs(binary)
 
     delegations =
-      for {_anno, name, arity, clauses} <- functions(ac) do
+      for {:function, anno, name, arity, clauses} <- ac do
         {kind, arity} = kind_of(name, arity, public)
         name = unmacro_name(name)
 
@@ -128,7 +124,7 @@ defmodule Tria.Compiler do
           Tracer.with_local_trace(signature, fn ->
             clauses
             |> Tracer.tag(label: :abstract)
-            |> AbstractTranslator.to_tria!(env: env(module, file), locals: locals)
+            |> AbstractTranslator.to_tria!(env: empty_env(module, file), locals: locals)
             |> remotify_local_calls(module, locals)
             |> put_file(file)
             |> Tracer.tag(label: :after_translation)
@@ -136,29 +132,32 @@ defmodule Tria.Compiler do
 
         clauses = fn_to_clauses(fn_clauses)
         definition = {signature, clauses}
-        ContextServer.emit_definition(context, definition)
+
+        if not is_special(name, arity) do
+          ContextServer.emit_definition(context, definition)
+        end
 
         doc = Map.get(docs, {name, arity})
         spec = Map.get(specs, {name, arity})
-        delegate(context, definition, doc: doc, spec: spec)
+        meta = AbstractTranslator.meta(anno)
+
+        delegate(context, definition, meta, doc: doc, spec: spec)
       end
 
     ContextServer.mark_ready(context, module)
     body = {:__block__, [], delegations}
     body = prepend_attrs(body, callbacks ++ types)
 
-    [{^module, binary}] = Code.compile_quoted({:defmodule, [], [module, [do: body]]}, file)
+    [{^module, binary}] =
+      {:defmodule, [], [module, [do: body]]}
+      # |> inspect_ast(label: :delegating)
+      |> Code.compile_quoted(file)
+
     {module, binary}
   end
 
-  defp functions([{:function, _, :__info__, 1, _} | tail]), do: functions(tail)
-  defp functions([{:function, anno, name, arity, clauses} | tail]) do
-    [{anno, name, arity, clauses} | functions(tail)]
-  end
-  defp functions([_ | tail]), do: functions(tail)
-  defp functions([]), do: []
-
   defp fetch_docs(binary) do
+    #FIXME This is unstable as duck
     {:ok, doc} = Codebase.fetch_chunk(binary, 'Docs')
     {:docs_v1, _, :elixir, "text/markdown", _, _, docs} = :erlang.binary_to_term(doc)
     for {{k, name, arity}, _, _, %{"en" => doc}, _} when k in ~w[macro function]a <- docs, into: %{} do
@@ -203,6 +202,102 @@ defmodule Tria.Compiler do
         other
     end)
   end
+
+  ## This function create an implementation of the function for delegating module
+  ## Generally, you want to make all regular functions call context implementation
+  ## and all other function left as is. But some stuff like `__info__/1` requires
+  ## decompilation and fetching struct fields
+
+  # We do not define private functions in delegating module, since they will not ever be called
+  defp delegate(_, {{_, private, _, _}, _}, _, _) when private in ~w[defp defmacrop]a, do: nil
+  # We parse `__info__` to find if it defines structure
+  defp delegate(_, {{_module, :def, :__info__, 1}, clauses}, _, _) do
+    clauses
+    |> Enum.find_value(fn
+      {[:struct], _, [do: value]} -> value
+      _ -> false
+    end)
+    |> case do
+      nil -> nil
+      fields ->
+        required = for {:%{}, _, [field: field, required: true]} <- fields, do: field
+        {:@, [], [{:enforce_keys, [], [required]}]}
+    end
+  end
+  # We leave struct as is, because it is faster to call it that way
+  defp delegate(_, {{module, :def, :__struct__, 0}, [{[], _, [do: body]}]}, _, _) do
+    Kernel.Utils.announce_struct(module)
+    case body do
+      {:%{}, _, pairs} ->
+        pairs = Keyword.delete(pairs, :__struct__)
+        case Keyword.pop(pairs, :__exception__) do
+          {nil, pairs} -> {:defstruct, [], [pairs]}
+          {_, pairs} -> {:defexception, [], [pairs]}
+        end
+
+      _ ->
+        nil
+    end
+  end
+  defp delegate(_, {{_module, :def, :__struct__, 1}, _}, _, _) do
+    nil
+  end
+  # We leave impl as is, because it will be faster to dispatch
+  defp delegate(_, {{_, :def, :__impl__, 1}, _} = definition, _, attrs) do
+    definition
+    |> define_definition()
+    |> prepend_attrs(attrs)
+  end
+  # We leave delegate defmacros, but we also prepend __CALLER__
+  defp delegate(tria_context, {{module, :defmacro, name, arity} = signature, _clauses}, meta, attrs) do
+    args = Macro.generate_unique_arguments(arity, nil)
+    callargs = [{:__CALLER__, [], nil} | args]
+    fname = fname(signature)
+
+    {:defmacro, meta, [{name, meta, args}, [do: dot_call(tria_context, fname, callargs, meta, meta)]]}
+    |> prepend_attrs(attrs)
+    |> Tracer.tag_ast(key: {module, name, arity}, label: :delegated)
+  end
+  # We simply delegate regular functions
+  defp delegate(tria_context, {{module, kind, name, arity} = signature, _}, meta, attrs) do
+    args = Macro.generate_unique_arguments(arity, nil)
+    fname = fname(signature)
+
+    {kind, meta, [{name, meta, args}, [do: dot_call(tria_context, fname, args, meta, meta)]]}
+    |> prepend_attrs(attrs)
+    |> Tracer.tag_ast(key: {module, name, arity}, label: :delegated)
+  end
+
+  defp prepend_attrs(quoted, []), do: quoted
+  defp prepend_attrs(quoted, [{_name, nil} | tail]) do
+    prepend_attrs(quoted, tail)
+  end
+  defp prepend_attrs({:__block__, _, lines}, [{name, value} | tail]) do
+    quote do
+      @(unquote(name)(unquote(value)))
+      unquote_splicing lines
+    end
+    |> prepend_attrs(tail)
+  end
+  defp prepend_attrs(quoted, [{name, value} | tail]) do
+    quote do
+      @(unquote(name)(unquote(value)))
+      unquote quoted
+    end
+    |> prepend_attrs(tail)
+  end
+
+  defp put_file(ast, file) do
+    prewalk(ast, fn
+      {left, meta, right} ->
+        {left, Keyword.put_new(meta, :file, file), right}
+
+      other ->
+        other
+    end)
+  end
+
+  ## Other public functions
 
   def save(build_path, module, binary) do
     filename = Path.join(build_path, "#{module}.beam")
@@ -368,62 +463,5 @@ defmodule Tria.Compiler do
     end
   end
 
-  # Struct is special because it is required for every
-  defp delegate(_, {{_, private, _, _}, _}, _) when private in ~w[defp defmacrop]a, do: nil
-  defp delegate(_, {{_module, :def, :__struct__, arity}, _} = definition, attrs) when arity in 0..2 do
-    definition
-    |> define_definition()
-    |> prepend_attrs(attrs)
-  end
-  defp delegate(tria_context, {{module, :defmacro, name, arity} = signature, _clauses}, attrs) do
-    args = Macro.generate_unique_arguments(arity, nil)
-    callargs = [{:__CALLER__, [], nil} | args]
-    fname = fname(signature)
-
-    quote do
-      defmacro(unquote(name)(unquote_splicing args), do: unquote(tria_context).unquote(fname)(unquote_splicing callargs))
-    end
-    |> prepend_attrs(attrs)
-    |> Tracer.tag_ast(key: {module, name, arity}, label: :delegated)
-  end
-  defp delegate(tria_context, {{module, kind, name, arity} = signature, _}, attrs) do
-    args = Macro.generate_unique_arguments(arity, nil)
-    fname = fname(signature)
-
-    quote do
-      unquote(kind)(unquote(name)(unquote_splicing args), do: unquote(tria_context).unquote(fname)(unquote_splicing args))
-    end
-    |> prepend_attrs(attrs)
-    |> Tracer.tag_ast(key: {module, name, arity}, label: :delegated)
-  end
-
-  defp prepend_attrs(quoted, []), do: quoted
-  defp prepend_attrs(quoted, [{_name, nil} | tail]) do
-    prepend_attrs(quoted, tail)
-  end
-  defp prepend_attrs({:__block__, _, lines}, [{name, value} | tail]) do
-    quote do
-      @(unquote(name)(unquote(value)))
-      unquote_splicing lines
-    end
-    |> prepend_attrs(tail)
-  end
-  defp prepend_attrs(quoted, [{name, value} | tail]) do
-    quote do
-      @(unquote(name)(unquote(value)))
-      unquote quoted
-    end
-    |> prepend_attrs(tail)
-  end
-
-  defp put_file(ast, file) do
-    prewalk(ast, fn
-      {left, meta, right} ->
-        {left, Keyword.put_new(meta, :file, file), right}
-
-      other ->
-        other
-    end)
-  end
 
 end

@@ -342,7 +342,8 @@ defmodule Tria.Compiler.AbstractTranslatorTest do
 
       [{_, binary}] =
         quote do
-          defmodule X do
+          defmodule unquote :"X_#{:erlang.unique_integer [:positive]}" do
+            @compile :debug_info
             def f(x, f \\ &to_string/1) do
               f.(x)
             end
@@ -368,6 +369,25 @@ defmodule Tria.Compiler.AbstractTranslatorTest do
   end
 
   describe "Guards" do
+    test "Variable inheritance" do
+      abstract do
+        fn
+          %{__struct__: underscore_2 = underscore_1} when :erlang.is_atom(underscore_2) ->
+            underscore_1
+        end
+      end
+      |> to_tria!()
+      |> unmeta()
+      |> assert_tri do
+        fn
+          %{__struct__: underscore_2 = underscore_1} when :erlang.is_atom(underscore_2) ->
+            underscore_1
+        end
+      end
+
+      assert_unique [underscore_1, underscore_2]
+    end
+
     test "Elixir" do
       abstract do
         case 1 do

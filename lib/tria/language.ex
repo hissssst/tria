@@ -4,6 +4,21 @@ defmodule Tria.Language do
   Like `Macro`, but for Tria. Contains useful guards, macro and functions
   """
 
+  @doc """
+  Function which creates clean macro env
+  """
+  @spec empty_env(module() | nil, Path.t()) :: Macro.Env.t()
+  def empty_env(module, file \\ "nofile") do
+    %Macro.Env{__ENV__ |
+      context: nil,
+      versioned_vars: %{},
+      module: module,
+      file: file,
+      function: nil,
+      line: 0
+    }
+  end
+
   import Tria.Language.Binary
   alias Tria.Compiler.SSATranslator
 
@@ -30,6 +45,11 @@ defmodule Tria.Language do
   end
 
   @doc """
+  Checks if it is tuple with size 3
+  """
+  defguard is_triple(tuple) when is_tuple(tuple) and tuple_size(tuple) == 3
+
+  @doc """
   Checks if atom is reserved and can't be used as a variable or function name
   """
   defguard is_reserved(name)
@@ -47,8 +67,8 @@ defmodule Tria.Language do
   """
   defguard is_variable(name, meta, context)
            when is_atom(name) and
-                  name not in @special_forms_invalid and
-                  name not in @reserved_words and
+                  # name not in @special_forms_invalid and
+                  # name not in @reserved_words and
                   name not in @special_vars and
                   is_list(meta) and
                   is_context(context)
@@ -99,7 +119,7 @@ defmodule Tria.Language do
            when is_tuple(t) and
                   tuple_size(t) == 3 and
                   is_atom(element(t, 0)) and
-                  element(t, 0) not in @special_forms_invalid and
+                  # element(t, 0) not in @special_forms_invalid and
                   element(t, 0) not in @special_vars and
                   is_list(element(t, 1)) and
                   is_atom(element(t, 2))
@@ -136,30 +156,6 @@ defmodule Tria.Language do
                   is_list(element(t, 2))
 
   @doc """
-  Checks if passed AST is a function call with dot (like Module.function)
-  """
-  defguard is_dot_call(t)
-           # and (element(t, 0) not in @special_forms)
-           when is_tuple(t) and
-                  tuple_size(t) == 3 and
-                  (is_tuple(element(t, 0)) and
-                     element(element(t, 0), 0) == :. and
-                     is_list(element(element(t, 0), 1)) and
-                     is_list(element(element(t, 0), 2))) and
-                  is_list(element(t, 1)) and
-                  is_list(element(t, 2))
-
-  @doc """
-  Checks if triple is a module, function, arity
-  """
-  defguard is_mfarity(module, function, arity) when is_atom(module) and is_atom(function) and is_integer(arity) and arity >= 0
-
-  @doc """
-  Checks if triple is a module, function, arity
-  """
-  defguard is_mfarity(mfarity) when is_tuple(mfarity) and tuple_size(mfarity) == 3 and is_mfarity(element(mfarity, 0), element(mfarity, 1), element(mfarity, 2))
-
-  @doc """
   Checks if passed AST is a literal (this means a value which represents itself in the AST)
   """
   defguard is_literal(l) when is_atom(l) or is_number(l) or is_binary(l)
@@ -192,7 +188,7 @@ defmodule Tria.Language do
     highlight_line = Keyword.get(opts, :highlight_line, :no_highlight)
 
     unformatted =
-      if Keyword.get(opts, :with_contexts, false) do
+      if Keyword.get(opts, :with_contexts, true) do
         Macro.prewalk(ast, fn
           {name, meta, {context, counter}} when is_atom(context) and is_integer(counter) ->
             {:"#{name}_#{context}_#{counter}", meta, nil}
@@ -360,7 +356,7 @@ defmodule Tria.Language do
   @spec gen_uniq_vars(non_neg_integer()) :: [Tria.variable()]
   def gen_uniq_vars(0), do: []
   def gen_uniq_vars(n) do
-    for _i <- 1..n, do: gen_uniq_var()
+    [gen_uniq_var() | gen_uniq_vars(n - 1)]
   end
 
   @doc """
@@ -380,9 +376,15 @@ defmodule Tria.Language do
     :erlang.unique_integer [:positive]
   end
 
-  @spec unify_contexts(Macro.t(), %{atom() => atom()}) :: {Macro.t(), %{atom() => atom()}}
-  def unify_contexts(ast, context_map \\ %{}) do
-    Macro.prewalk(ast, context_map, fn
+  @spec unify_contexts(Tria.t()) :: Tria.t()
+  def unify_contexts(ast) do
+    {ast, _} = unify_contexts(ast, %{})
+    ast
+  end
+
+  @spec unify_contexts(Tria.t(), %{Tria.context() => Tria.context()}) :: {Tria.t(), %{Tria.context() => Tria.context()}}
+  def unify_contexts(ast, context_map) do
+    prewalk(ast, context_map, fn
       {name, meta, context} = a, context_map when is_variable(a) ->
         case context_map do
           %{^context => new_context} ->
@@ -398,12 +400,12 @@ defmodule Tria.Language do
     end)
   end
 
-  ## Misc
+  ## Checks
 
   @doc """
   Checks if given AST is a special form
   """
-  @spec is_special_form(Tria.t()) :: pos_integer()
+  @spec is_special_form(Tria.t()) :: boolean()
   def is_special_form({:when, _meta, _args}), do: true
   def is_special_form({name, _, _}) when name in @special_forms_invalid, do: true
   def is_special_form({name, _, _}) when name in @reserved_words, do: true
@@ -426,7 +428,7 @@ defmodule Tria.Language do
   def quoted_literal?({:{}, _, args}), do: quoted_literal?(args)
   def quoted_literal?({:<<>>, _, _} = binary) do
     binary
-    |> traverse_binary_specifiers(true, fn ast, acc -> acc and quoted_literal?(ast) end)
+    |> traverse_binary_inputs(true, fn ast, acc -> {ast, acc and quoted_literal? ast} end)
     |> elem(1)
   end
   def quoted_literal?({left, right}), do: quoted_literal?(left) and quoted_literal?(right)
@@ -453,7 +455,7 @@ defmodule Tria.Language do
 
       {:<<>>, _, _} = binary ->
         binary
-        |> traverse_binary_specifiers(true, fn ast, acc -> acc and vared_literal? ast end)
+        |> traverse_binary_inputs(true, fn ast, acc -> {ast, acc and vared_literal? ast} end)
         |> elem(1)
 
       [] ->
@@ -631,11 +633,21 @@ defmodule Tria.Language do
     filtered
   end
 
-  ### High-level helpers
+  ## Other non-Tria related helpers
+  #TODO think of a better place for them
 
-  def undefined_vars(ast) do
-    {_, %{undefined: undefined}} = SSATranslator.from_tria(ast)
-    undefined
+  @spec with_pdict(map | [{any(), any()}], (() -> result :: any())) :: result :: any()
+  def with_pdict(opts, func) do
+    olds = for {key, value} <- opts, do: {key, Process.put(key, value)}
+
+    try do
+      func.()
+    after
+      Enum.each(olds, fn
+        {key, nil} -> Process.delete(key)
+        {key, old} -> Process.put(key, old)
+      end)
+    end
   end
 
 end

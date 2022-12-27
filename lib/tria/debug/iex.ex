@@ -6,7 +6,7 @@ defmodule Tria.Debug.IEx do
 
   defmacro compiled(do: body) do
     tria_body = ElixirTranslator.to_tria!(body, __ENV__)
-    undefined = MapSet.to_list undefined_vars tria_body
+    undefined = []
 
     name = :"Tria.Temp#{:erlang.unique_integer [:positive]}"
     quoted =

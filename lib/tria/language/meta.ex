@@ -30,4 +30,9 @@ defmodule Tria.Language.Meta do
   def meta_of({_, meta, _}), do: meta
   def meta_of(_), do: []
 
+  @spec join_meta(t(), t()) :: t()
+  def join_meta(left, right) do
+    Keyword.merge(left, right)
+  end
+
 end

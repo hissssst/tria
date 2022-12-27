@@ -10,14 +10,18 @@ defmodule Tria.Language.Interpreter do
   """
 
   # Because we redefine it
-  import Kernel, except: [&&: 2]
+  import Kernel, except: [&&: 2, ||: 2]
 
   import Tria.Language
   import Tria.Language.Ternary
   import Tria.Language.Tri
+  import Tria.Language.MFArity, only: [is_dotcall: 1]
 
   alias Tria.Compiler.ElixirTranslator
   alias Tria.Language.Matchlist
+  alias Tria.Language.Bindmap
+
+  import Tria.Language.Guard
   import Matchlist, only: [is_map_match: 1, is_empty: 1]
 
   @type eval_result :: {:ok, {any(), Matchlist.t()}}
@@ -93,13 +97,14 @@ defmodule Tria.Language.Interpreter do
   def multimatch([left], [right]), do: match(left, right)
   def multimatch([{:when, _, [lefts]}], right) do
     {guard, left} = List.pop_at(lefts, -1)
-    left = quote do: {unquote_splicing(left)} when unquote(guard)
-    right = quote do: {unquote_splicing(right)}
+    right = List.wrap right
+    left  = tri {tri_splicing left} when tri(guard)
+    right = tri {tri_splicing right}
     match(left, right)
   end
   def multimatch(left, right) when is_list(left) and is_list(right) do
-    left = quote do: {unquote_splicing(left)}
-    right = quote do: {unquote_splicing(right)}
+    left  = tri {tri_splicing left}
+    right = tri {tri_splicing right}
     match(left, right)
   end
 
@@ -109,6 +114,19 @@ defmodule Tria.Language.Interpreter do
   Tries to match ast on pattern and returns the ternary result with bindings
   """
   @spec match(Tria.t(), Tria.t()) :: {:yes | :maybe, Matchlist.t()} | :no
+
+  def match({:when, _, [pattern, guards]}, ast, bindmap) do
+    case match(pattern, ast) do
+      {level, matches} when level in ~w[maybe yes]a ->
+        bindmap = Bindmap.merge_matchlist(bindmap, matches)
+        {check_guards(guards, bindmap) && level, matches}
+
+      _ ->
+        #FIXME
+        :no
+    end
+  end
+  def match(other, ast, _bindmap), do: match(other, ast)
 
   # When
   def match({:when, _, [pattern, conditions]}, ast) do
@@ -394,5 +412,73 @@ defmodule Tria.Language.Interpreter do
 
     {left, right}
   end
+
+  ### Checking gurads
+
+  def check_guards(guards, bindmap) do
+    guards = unjoin_when(guards)
+    do_check_guards(guards, bindmap, :yes)
+  end
+
+  def do_check_guards(_, _, :no), do: :no
+  def do_check_guards([], _, acc), do: acc
+  def do_check_guards([guard | tail], bindmap, acc) do
+    do_check_guards(tail, bindmap, acc && check_guard(guard, bindmap))
+  end
+
+  defguard is_any(value) when is_dotcall(value) or is_variable(value)
+    or (is_triple(value) and :erlang.element(1, value) in ~w[receive case try cond]a)
+
+  def check_guard(dot_call(:erlang, :andalso, [left, right]), bindmap) do
+    check_guard(left, bindmap) && check_guard(right, bindmap)
+  end
+
+  def check_guard(dot_call(:erlang, :orelse, [left, right]), bindmap) do
+    check_guard(left, bindmap) || check_guard(right, bindmap)
+  end
+
+  def check_guard(dot_call(_, :is_map, key), bindmap) do
+    case Bindmap.fetch_unfolded(bindmap, key) do
+      {:ok, {:%{}, _, _}} -> :yes
+      {:ok, value} when is_any(value) -> :maybe
+      {:ok, _} -> :no
+      _ -> :maybe
+    end
+  end
+  def check_guard(dot_call(_, :is_tuple, key), bindmap) do
+    case Bindmap.fetch_unfolded(bindmap, key) do
+      {:ok, {_, _}} -> :yes
+      {:ok, {:{}, _, _}} -> :yes
+      {:ok, value} when is_any(value) -> :maybe
+      {:ok, _} -> :no
+      _ -> :maybe
+    end
+  end
+  def check_guard(dot_call(_, :is_binary, key), bindmap) do
+    case Bindmap.fetch_unfolded(bindmap, key) do
+      {:ok, {:<<>>, _, _}} -> :yes
+      {:ok, value} when is_any(value) -> :maybe
+      {:ok, _} -> :no
+      _ -> :maybe
+    end
+  end
+  for literal_check <- ~w[is_atom is_integer is_float is_number]a do
+    def check_guard(dot_call(:erlang, unquote(literal_check), key), bindmap) do
+      case Bindmap.fetch_unfolded(bindmap, key) do
+        {:ok, value} when :erlang.unquote(literal_check)(value) ->
+          :yes
+
+        {:ok, var} when is_variable(var) ->
+          :maybe
+
+        :error ->
+          :maybe
+
+        _ ->
+          nil
+      end
+    end
+  end
+  def check_guard(_, _), do: :maybe
 
 end

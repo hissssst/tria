@@ -12,7 +12,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
 
   # Does this even work in elixir?
   @compile :nowarn_unused_vars
-  @compile {:nowarn_unused_vars, true}
 
   defp run_while(ast, opts \\ []) do
     Evaluation.run_while(ast, opts)
@@ -197,7 +196,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         end
       end
       |> run_while(remove_unused: false)
-      # |> inspect_ast(label: :result, with_contexts: true)
       |> assert_tri do
         x = function()
         y = 1
@@ -211,6 +209,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       assert_unique [x, y, z, something, m]
     end
 
+    @tag skip: true
     test "Definitions in strange places" do
       tri do
         x = (x = 1; y = x + 1)
@@ -220,12 +219,63 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
           z -> z
         end
       end
-      |> run_while() #remove_unused: false)
-      |> inspect_ast(label: :result, with_contexts: true)
+      |> run_while(remove_unused: false)
       |> assert_tri do
         x2 = (x1 = 1; y1 = 2)
         z1 = [y2 = 3, x3 = 1]
         z2 = [3, 1, 3, 1]
+      end
+    end
+
+    test "Propagated and removed" do
+      tri do
+        field = func(variable)
+        [38, encode_pair(field)]
+      end
+      |> run_while()
+      |> assert_tri do
+        [38, encode_pair func variable]
+      end
+    end
+
+    test "Propagated and removed take 2" do
+      tri do
+        mapper = fn
+          {_, 1} ->
+            []
+
+          {field, value} ->
+            field =
+              case parent_field do
+                "" -> encode_key(field)
+                _ -> parent_field
+              end
+
+            [?&, encode_pair(field, value, encoder)]
+        end
+
+        kv
+        |> Enum.flat_map(mapper)
+      end
+      |> run_while(inspect_iteration: :iter)
+      |> inspect_ast(label: :result)
+      # |> unmeta()
+      |> assert_tri do
+        Enum.flat_map(kv, fn
+          {_, 1} -> []
+          {field, value} ->
+            [
+              38,
+              encode_pair(
+                case parent_field do
+                  "" -> encode_key(field)
+                  _ -> parent_field
+                end,
+                value,
+                encoder
+              )
+            ]
+        end)
       end
     end
   end
@@ -269,7 +319,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         M.f(b)
       end
       |> run_while(remove_unused: false)
-      # |> inspect_ast(label: :result)
       |> assert_tri do
         x1 = 1
         x2 = 2
@@ -335,7 +384,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         end
       end
       |> run_while(remove_unused: false)
-      # |> inspect_ast(label: :result, with_contexts: true)
       |> assert_tri do
         x1 = 1
         fn
@@ -426,9 +474,9 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       end
       |> run_while()
       |> assert_tri do
-        case [1, 2 | _tail] do
+        case [1, 2 | tail] do
           [_, _] -> 2
-          other -> Kernel.length(other)
+          other -> Kernel.length([1, 2 | tail])
         end
       end
     end
@@ -549,9 +597,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         send(pid, y)
         (fn x -> send(pid, x) end).(y)
       end
-      |> inspect_ast(with_contexts: true, label: :before)
       |> run_while()
-      |> inspect_ast(with_contexts: true, label: :result)
       |> assert_tri do
         Kernel.send(pid, y)
         Kernel.send(pid, y)
@@ -611,7 +657,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         end).({1, 2}, fn _ -> :delete_me end)
       end
       |> run_while()
-      # |> inspect_ast(label: :result)
       |> assert_tri do
         {:ok, {2}}
       end
@@ -736,7 +781,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       end
       |> run_while()
       |> last_line()
-      # |> inspect_ast(label: :result, with_contexts: true)
       |> assert_tri do
         fn
           :view, {x1, func1} ->
@@ -867,7 +911,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         end
       end
       |> run_while()
-      # |> inspect_ast(label: :result)
       |> assert_tri do
         data_size = Kernel.-(block_size, 1)
 
@@ -974,7 +1017,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       end
       |> run_while()
       |> last_line()
-      # |> inspect_ast(label: :result, with_contexts: true)
       |> assert_tri do
         fn
           :view, {x1, function} ->
@@ -1047,7 +1089,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       end).(input, fn x -> {:ok, x} end)
     end
     |> run_while()
-    # |> inspect_ast(label: :result, with_contexts: true)
     |> last_line()
     |> assert_tri do
       case input do
@@ -1058,15 +1099,14 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
           {:ok, x2}
 
         tuple when :erlang.andalso(Kernel.is_tuple(tuple), Kernel.>(Kernel.tuple_size(tuple), 3)) ->
-          x3 = :erlang.element(4, input)
-          {:ok, x3}
+          {:ok, :erlang.element(4, input)}
 
         _ ->
           :error
       end
     end
 
-    assert_unique [x1, x2, x3, tuple, input]
+    assert_unique [x1, x2, tuple, input]
   end
 
   describe "Structure" do
@@ -1118,7 +1158,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
   #       end
   #     end
   #     |> run_while()
-  #     |> inspect_ast(label: :result)
   #     |> assert_tri do
   #       x1 = 1
   #       try do
@@ -1191,10 +1230,8 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
 
       assert_unique [a, b, c, impure]
     end
-  end
 
-  describe "Block unused removal" do
-    test "with fn" do
+    test "Block unused removal with fn" do
       tri do
         x = [1, fn x -> y = M.f(); x + y end]
         {x, x}
@@ -1206,6 +1243,30 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       end
 
       assert_unique [x1, x2, y]
+    end
+
+    test "Simplest in block used once" do
+      tri do
+        y = x + 1
+        y * 2
+      end
+      |> run_while()
+      |> assert_tri do
+        Kernel.*(Kernel.+(x, 1), 2)
+      end
+    end
+
+    test "Used once inside fn" do
+      tri do
+        fn x ->
+          y = x + 1
+          y * 2
+        end
+      end
+      |> run_while()
+      |> assert_tri do
+        fn x -> Kernel.*(Kernel.+(x, 1), 2) end
+      end
     end
   end
 end

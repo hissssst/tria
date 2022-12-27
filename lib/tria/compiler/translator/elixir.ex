@@ -26,7 +26,6 @@ defmodule Tria.Compiler.ElixirTranslator do
   import Tria.Language
   import Tria.Language.Tri
   import Tria.Language.Meta
-  import Tria.Language.Codebase, only: [empty_env: 0]
 
   alias Tria.Language.Codebase
   alias Tria.Language.Guard
@@ -39,8 +38,8 @@ defmodule Tria.Compiler.ElixirTranslator do
   Translates Elixir AST to Tria AST, raising
   """
   @impl true
-  def to_tria!(ast, env \\ empty_env()) do
-    {ast, _env} = expand_all(ast, env)
+  def to_tria!(ast, env \\ empty_env(nil)) do
+    {:ok, ast, _env} = to_tria(ast, env)
     ast
   rescue
     e ->
@@ -52,7 +51,12 @@ defmodule Tria.Compiler.ElixirTranslator do
   Translates Elixir AST to Tria AST, non-raising
   """
   @impl true
-  def to_tria(ast, env \\ empty_env()) do
+  def to_tria(ast, env \\ empty_env(nil)) do
+    env =
+      env
+      |> Map.update!(:functions, &Keyword.delete(&1, env.module))
+      |> Map.update!(:macros, &Keyword.delete(&1, env.module))
+
     {ast, env} = expand_all(ast, env)
     {:ok, ast, env}
   end
@@ -61,7 +65,7 @@ defmodule Tria.Compiler.ElixirTranslator do
   Translates Tria AST to Elixir AST
   """
   @impl true
-  def from_tria(tria_ast, _opts \\ []) do
+  def from_tria(tria_ast, opts \\ []) do
     # Because Tria is a subset of Elixir
     prewalk(tria_ast, fn
       # Translates tria variables to elixir variables
@@ -77,7 +81,7 @@ defmodule Tria.Compiler.ElixirTranslator do
         end
 
       {:try, meta, [clauses]} ->
-        clauses = try_to_elixir(clauses)
+        clauses = unless opts[:leave_try], do: try_to_elixir(clauses), else: clauses
         {:try, meta, [clauses]}
 
       {:receive, meta, [[do: body, after: {timeout, after_body}]]} ->
@@ -116,6 +120,7 @@ defmodule Tria.Compiler.ElixirTranslator do
   defp expand_all(ast, env) do
     # IO.inspect(env.context, label: :context)
     # IO.inspect(ast, label: :ast)
+
     case Macro.expand(ast, env) do
       # Imports, aliases, requires and other stuff which changes env
       {:__aliases__, _, _} = aliased ->
@@ -165,7 +170,7 @@ defmodule Tria.Compiler.ElixirTranslator do
 
       # Quoted
       # FIXME TODO handle opts
-      {:quote, _meta, opts_body} ->
+      {:quote, _meta, opts_body} when is_list(opts_body) ->
         expand_quote(opts_body, env)
         # |> tap(fn {body, _} -> IO.inspect(body, label: :expanded) end)
 
@@ -285,7 +290,7 @@ defmodule Tria.Compiler.ElixirTranslator do
         expand_all({:fn, meta, [{:"->", meta, [vars, body]}]}, env)
 
       # Fn
-      {:fn, meta, clauses} ->
+      {:fn, meta, clauses} when is_list(clauses) ->
         {clauses, _internal_env} = expand_clauses(clauses, env)
         {{:fn, meta, clauses}, env}
 

@@ -8,6 +8,8 @@ defmodule Tria.MixProject do
       elixir: "~> 1.11",
       start_permanent: false,
       elixirc_paths: elixirc_paths(),
+      erlc_options: [debug_info: true],
+      test_elixirc_options: [debug_info: true, docs: true],
       deps: deps()
     ]
   end

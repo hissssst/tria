@@ -11,23 +11,9 @@ defmodule Mix.Tasks.Compile.Tria do
     # manifest_path = Mix.Project.manifest_path(mix_config)
 
     [
-      {Plug.Test, :delete_req_cookie, 0},
-      {Plug.Test, :delete_req_cookie, 1},
-      {Plug.Test, :delete_req_cookie, 2},
-      {Plug.Test, :delete_req_cookie, 3},
-      {Plug.Test, :delete_req_cookie, 4},
-      {Defbug, :exception, 1},
-      # {Defbug, :f, 1},
-      # {Bandit.Clock, :date_header, 0},
-      # {Bandit.Clock, :start_link, 1},
-      # {Bandit.Clock, :init, 0},
-      # {Bandit.Clock, :run, 0},
-      # {Bandit.Clock, :get_date_header, 0},
-      # {Bandit.Clock, :update_header, 0},
-      # {Plug.Parsers.RequestTooLargeError, :exception, 1},
-      # {Plug.Application, :start, 2},
+      {Plug.Debugger, :template_markdown, 1},
     ]
-    |> Enum.map(&Tracer.trace(&1, only: [:before_passes, :generating]))
+    |> Enum.map(&Tracer.trace(&1, only: :all))
 
     root = Path.dirname Mix.Project.project_file()
 

@@ -8,7 +8,7 @@ defmodule Tria.Language.Guard do
   import Tria.Language.Tri
   import Tria.Language.Binary, only: [traverse_specifier: 3]
 
-  @available [
+  @checks [
     # Checks
     {:erlang, :is_atom, 1},
     {:erlang, :is_binary, 1},
@@ -27,7 +27,9 @@ defmodule Tria.Language.Guard do
     # {:erlang, :is_record, 3},
     {:erlang, :is_reference, 1},
     {:erlang, :is_tuple, 1},
+  ]
 
+  @available @checks ++ [
     # Allowed functions
     {:erlang, :abs, 1},
     {:erlang, :bit_size, 1},
@@ -49,6 +51,11 @@ defmodule Tria.Language.Guard do
     {:erlang, :tuple_size, 1},
 
     # Operators
+    {:erlang, :and, 2},
+    {:erlang, :or, 2},
+    {:erlang, :xor, 2},
+    {:erlang, :orelse, 2},
+    {:erlang, :andalso, 2},
     {Kernel,  :==, 2},
     {Kernel,  :!=, 2},
     {Kernel,  :<=, 2},
@@ -66,11 +73,6 @@ defmodule Tria.Language.Guard do
     {Kernel,  :not, 1},
     {Kernel,  :or, 2},
     {Kernel,  :and, 2},
-    {:erlang, :and, 2},
-    {:erlang, :or, 2},
-    {:erlang, :xor, 2},
-    {:erlang, :orelse, 2},
-    {:erlang, :andalso, 2},
 
     # Elixir
     {Kernel, :*, 2},
@@ -200,5 +202,14 @@ defmodule Tria.Language.Guard do
     List.pop_at(args_and_guard, -1)
   end
   def pop_guard(args), do: {nil, args}
+
+  def unjoin_when({:when, _, [left, right]}) do
+    [left | unjoin_when(right)]
+  end
+  def unjoin_when(other), do: other
+
+  def join_when(guards, meta \\ [])
+  def join_when([other], _), do: other
+  def join_when([head | tail], meta), do: {:when, meta, [head, join_when(tail, meta)]}
 
 end

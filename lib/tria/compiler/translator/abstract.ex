@@ -10,12 +10,10 @@ defmodule Tria.Compiler.AbstractTranslator do
 
   @behaviour Tria.Compiler.Translator
 
-  import Tria.Language, except: [pin: 1, pin: 2]
+  import Tria.Language, except: [pin: 1, pin: 2, traverse: 4]
   import Tria.Language.Tri
-  import Tria.Language.Codebase, only: [empty_env: 0]
   alias Tria.Debug.Tracer
   alias Tria.Language.Codebase
-  alias Tria.Compiler.ElixirTranslator
   alias Tria.Compiler.SSATranslator
 
   def to_tria!(abstract, opts \\ []) do
@@ -31,8 +29,6 @@ defmodule Tria.Compiler.AbstractTranslator do
     to_tria(abstract, Map.new opts)
   end
   def to_tria(abstract, opts) do
-    env = Map.get_lazy(opts, :env, &empty_env/0)
-
     traverse_function =
       if is_list(abstract) and opts[:as_block] do
         &traverse_block/1
@@ -40,43 +36,35 @@ defmodule Tria.Compiler.AbstractTranslator do
         &traverse/1
       end
 
-    with_locals(opts, fn ->
-      abstract
-      |> traverse_function.()
-      |> elixir_to_tria(env)
+    opts
+    |> Map.take([ :locals, :env ])
+    |> with_pdict(fn ->
+      tria =
+        abstract
+        # |> IO.inspect(label: :abstract)
+        |> traverse_function.()
+        |> Tracer.tag_ast(label: :abstract_pre_ssa)
+        |> Tracer.tag(label: :abstract_pre_ssa_ast, pretty: true)
+        |> to_ssa(pin_known: true)
+        |> Tracer.tag_ast(label: :abstract_after_ssa)
+        # |> inspect_ast(label: :abstracted)
+
+      {:ok, tria, []}
     end)
   end
 
-  defp with_locals(%{locals: locals}, func) do
-    old = Process.put(:locals, locals)
-    try do
-      func.()
-    after
-      old && Process.put(:locals, old) || Process.delete(:locals)
+  defp to_ssa([{:"->", _, _} | _] = clauses, opts) do
+    with {:fn, _, clauses} <- to_ssa({:fn, [], clauses}, opts) do
+      clauses
     end
   end
-  defp with_locals(_, func), do: func.()
-
-  defp elixir_to_tria([{:"->", _, _} | _] = clauses, env) do
-    with {:ok, {:fn, _, clauses}, env} <- elixir_to_tria({:fn, [], clauses}, env) do
-      {:ok, clauses, env}
-    end
-  end
-  defp elixir_to_tria(other, env) do
-    with {:ok, tria, env} <- ElixirTranslator.to_tria(other, env) do
-      Tracer.tag_ast(tria, label: :abstract_pre_ssa)
-      # We call translation to SSA, because actually
-      # Erlang is not statically assigned. `fun()` arguments
-      # actually shadow existing variables
-      {:ok, SSATranslator.from_tria!(tria, pin_known: true), env}
-    end
-  end
+  defp to_ssa(ast, opts), do: SSATranslator.from_tria!(ast, opts)
 
   def traverse(abstract) do
     case abstract do
       # Specials
-      l when is_list(l) ->
-        Enum.map(l, &traverse/1)
+      list when is_list(list) ->
+        Enum.map(list, &traverse/1)
 
       {nil, _anno} ->
         []
@@ -106,14 +94,11 @@ defmodule Tria.Compiler.AbstractTranslator do
             {:"->", meta, [[condition], body]}
           end)
 
-        quote do
-          cond(do: unquote(clauses))
-        end
-        |> with_meta(meta anno)
+        {:cond, meta(anno), [[do: clauses]]}
 
       # List comprehension
-      {:lc, _anno, body, loops} ->
-        quote do: for(unquote_splicing(traverse loops), do: unquote(traverse_block body))
+      {:lc, anno, body, loops} ->
+        {:for, meta(anno), traverse(loops) ++ [[do: traverse_block body]]}
 
       {:block, anno, block} ->
         {:__block__, meta(anno), Enum.map(block, &traverse/1)}
@@ -126,73 +111,55 @@ defmodule Tria.Compiler.AbstractTranslator do
       {:maybe_match, anno, left, right} ->
         {:"<-", meta(anno), [traverse(left), traverse_block(right)]}
 
-      {:maybe, _anno, body, {:else, _anno2, elses}} ->
+      {:maybe, anno, body, {:else, _anno2, elses}} ->
         {res, clauses} = add_res_to_clauses traverse body
         elses = traverse elses
-        quote do: with(unquote_splicing(clauses), do: unquote(res), else: unquote(elses))
+        {:with, meta(anno), clauses ++ [[do: res, else: elses]]}
 
-      {:maybe, _anno, body} ->
+      {:maybe, anno, body} ->
         clauses = traverse body
         {res, clauses} = add_res_to_clauses(clauses)
-        quote do: with(unquote_splicing(clauses), do: unquote(res))
+        {:with, meta(anno), clauses ++ [[do: res]]}
 
       # Receive
       {:receive, anno, clauses} ->
-        quote do
-          receive do
-            unquote traverse clauses
-          end
-        end
-        |> with_meta(meta anno)
+        {:receive, meta(anno), [[do: traverse clauses]]}
 
       {:receive, anno, [], after_what, do_what} ->
-        quote do
-          receive after: (unquote(traverse after_what) -> unquote(traverse_block do_what))
-        end
-        |> with_meta(meta anno)
+        {:receive, meta(anno), [[after: {traverse(after_what), traverse_block(do_what)}]]}
 
       {:receive, anno, clauses, after_what, do_what} ->
-        quote do
-          receive do
-            unquote traverse clauses
-          after
-            unquote(traverse after_what) -> unquote(traverse_block do_what)
-          end
-        end
-        |> with_meta(meta anno)
+        {:receive, meta(anno), [[do: traverse(clauses), after: {traverse(after_what), traverse_block(do_what)}]]}
 
       # Try
       {:try, anno, body, else_clauses, catch_clauses, after_body} ->
         clauses =
           [do: traverse_block body]
-          ++ traverse_try_clauses(catch_clauses)
+          ++ [catch: traverse_catch_clauses(catch_clauses)]
           ++ [else: traverse else_clauses]
           ++ [after: traverse_block after_body]
 
         cleanup_try {:try, meta(anno), [clauses]}
 
-      {:catch, _anno, _body} ->
-        # TODO maybe this is wrong
-        # quote do
-        #   try do
-        #     unquote traverse_block body
-        #   rescue
-        #     any -> any
-        #   catch
-        #     any -> any
-        #   end
-        # end
-        # |> cleanup_try()
+      {:catch, anno, body} ->
+        #TODO maybe this is wrong
+        body = traverse_block body
+        tri do
+          try do
+            body
+          catch
+            :error, any -> any
+            :throw, any -> any
+          end
+        end
+        |> with_meta(meta anno)
+        |> cleanup_try()
 
-        raise "Not implemented"
+      {:generate, anno, left, right} ->
+        {:"<-", meta(anno), [traverse(left), traverse(right)]}
 
-      {:generate, _anno, left, right} ->
-        quote do: unquote(traverse left) <- unquote(traverse right)
-
-      {:b_generate, _anno, left, right} ->
-        IO.inspect left
-        IO.inspect right
-        raise "Not implemented"
+      {:b_generate, anno, left, right} ->
+        {:"<-", meta(anno), [traverse(left), traverse(right)]}
 
       # Binary
       {:bin, anno, elements} ->
@@ -205,16 +172,14 @@ defmodule Tria.Compiler.AbstractTranslator do
         |> with_meta(meta anno)
 
       {:bin_element, anno, expr, :default, tsl} ->
-        quote do
-          unquote(traverse expr) :: unquote(traverse_tsl tsl)
-        end
-        |> with_meta(meta anno)
+        {:"::", meta(anno), [traverse(expr), traverse_tsl(tsl)]}
 
       {:bin_element, anno, expr, size, tsl} ->
-        quote do
-          unquote(traverse expr) :: unquote(traverse_tsl [tsl, {:size, size}])
-        end
-        |> with_meta(meta anno)
+        {:"::", meta(anno), [traverse(expr), traverse_tsl([tsl, {:size, size}])]}
+
+      # Binary comprehension
+      {:bc, anno, element, qualifiers} ->
+        {:for, meta(anno), [{:<<>>, meta(anno), traverse(qualifiers)}, [do: traverse(element)]]}
 
       # Charlist
       {:string, _anno, list} ->
@@ -225,15 +190,10 @@ defmodule Tria.Compiler.AbstractTranslator do
         tail = traverse(tail)
         head = traverse(head)
         case tail do
-          # This clause is handled by the next clause
-          # [{:"|", _, [left, right]}] ->
-          #   quote do: [head, left | right]
-
           list when is_list(list) ->
             [head | tail]
 
           other ->
-            # [unquote(head) | unquote(other)]
             [{:"|", meta(anno), [head, other]}]
         end
 
@@ -249,23 +209,20 @@ defmodule Tria.Compiler.AbstractTranslator do
               {key, traverse(value)}
           end)
 
-        quote do
-          %{unquote_splicing items}
-        end
-        |> with_meta(meta anno)
+        {:"%{}", meta(anno), items}
 
       {:map, anno, original, items} ->
         #TODO optimize map generation for all map_field_exact
         items
         |> Enum.reduce(traverse(original), fn
-          {:map_field_exact, _anno, key, value}, {:"%{}", meta, [{:"|", consmeta, [left, right]}]} ->
-            {:"%{}", meta, [{:"|", consmeta, [left, right ++ [{traverse(key), traverse(value)}]]}]}
+          {:map_field_exact, _anno, key, value}, {:"%{}", meta, [{:"|", consmeta, [acc, pairs]}]} ->
+            {:"%{}", meta, [{:"|", consmeta, [acc, pairs ++ [{traverse(key), traverse(value)}]]}]}
 
-          {:map_field_exact, _anno, key, value}, acc ->
-            quote do: %{unquote(acc) | unquote(traverse key) => unquote(traverse value)}
+          {:map_field_exact, anno, key, value}, acc ->
+            {:"%{}", [], [{:"|", meta(anno), [acc, [{traverse(key), traverse(value)}]]}]}
 
-          {:map_field_assoc, _anno, key, value}, acc ->
-            quote do: Map.put(unquote(acc), unquote(traverse key), unquote(traverse value))
+          {:map_field_assoc, anno, key, value}, acc ->
+            dot_call(Map, :put, [acc, traverse(key), traverse(value)], meta(anno), meta(anno))
         end)
         |> with_meta(meta anno)
 
@@ -277,30 +234,43 @@ defmodule Tria.Compiler.AbstractTranslator do
         {:"{}", meta(anno), Enum.map(items, &traverse/1)}
 
       # Functions, funs and calls
-      {:fun, anno, {:function, name, arity}} ->
-        quote do: &unquote({name, meta(anno), nil})/unquote(arity)
+      {:fun, anno, {:function, name, arity}} when is_atom(name) and is_integer(arity) ->
+        meta = meta anno
+        args = gen_uniq_vars(arity)
 
-      {:fun, anno, {:function, m, f, a}} ->
-        quote do
-          &unquote(traverse m).unquote(traverse f)/unquote(traverse a)
+        body =
+          case module_for_fa(name, arity) do
+            nil -> {name, meta, args}
+            module -> dot_call(module, name, args, meta, meta)
+          end
+
+        {:fn, meta, [{:"->", meta, [args, body]}]}
+
+      {:fun, anno, {:function, module, function, arity}} ->
+        meta = meta anno
+        case traverse [module, function, arity] do
+          [module, function, arity] when is_atom(function) and is_integer(arity) ->
+            args = gen_uniq_vars(arity)
+            call = dot_call(module, function, args, meta, meta)
+            {:fn, meta, [{:"->", meta, [args, call]}]}
+
+          [module, function, arity] ->
+            dot_call(Function, :capture, [module, function, arity], meta, meta)
         end
-        |> with_meta(meta anno)
 
       {:fun, anno, {:clauses, clauses}} ->
-        {:fn, meta(anno), traverse(clauses)}
-        # We call translation this translation chain, because actually
+        # We call translation this translation, because actually
         # Erlang is not statically assigned. `fun()` arguments shadow
-        # existing variables
-        |> ElixirTranslator.to_tria!(__ENV__)
-        |> SSATranslator.from_tria!(pin_known: true)
-        |> ElixirTranslator.from_tria()
+        # existing variables. Therefore, we change names of variables
+        # defined in arguments of functions
+        {:fn, meta(anno), traverse clauses}
+        |> SSATranslator.from_tria!()
 
-      {:named_fun, _anno, _name, _clauses} ->
-        # var = traverse name
-        # fun = traverse {:fun, 0, {:clauses, clauses}}
-        # quote do: unquote(var) = unquote(fun)
-
-        raise "Not implemented"
+      {:named_fun, anno, name, clauses} ->
+        #FIXME this one is absolutely incorrect
+        var = traverse name
+        fun = traverse {:fun, 0, {:clauses, clauses}}
+        {:=, meta(anno), [var, fun]}
 
       {:call, anno, {:remote, dotanno, module, func}, args} ->
         m = meta anno
@@ -308,26 +278,17 @@ defmodule Tria.Compiler.AbstractTranslator do
         dot_call(traverse(module), traverse(func), traverse(args), dotm, m)
 
       {:call, anno, func, args} ->
-        meta = meta(anno)
+        meta = meta anno
+        args = traverse(args)
         case traverse(func) do
           func when is_atom(func) ->
-            farity = {func, length(args)}
-            cond do
-              farity in Process.get(:locals, []) ->
-                {func, meta, traverse(args)}
-
-              farity in erlang_funcs() ->
-                dot_call(:erlang, traverse(func), traverse(args), meta, meta)
-
-              true ->
-                {func, meta, traverse(args)}
+            case module_for_fa(func, length args) do
+              nil -> {func, meta, args}
+              module -> dot_call(module, func, args, meta, meta)
             end
 
           other ->
-            quote do
-              (unquote(other)).(unquote_splicing traverse args)
-            end
-            |> with_meta(meta)
+            dot_call(other, args)
         end
 
       # Variable
@@ -370,7 +331,7 @@ defmodule Tria.Compiler.AbstractTranslator do
   #
   # So, this functions translates these `catch` clauses back to rescue
   # There are 3 different cases which are translated differently into Elixir errors
-  defp traverse_try_clauses(clauses) when is_list(clauses) do
+  defp traverse_catch_clauses(clauses) when is_list(clauses) do
     clauses
     |> traverse()
     |> Enum.map(fn {:"->", meta, [[pattern], body]} ->
@@ -382,7 +343,6 @@ defmodule Tria.Compiler.AbstractTranslator do
           {:"->", meta, [[type, exception], replace_stacktrace(body, stacktrace)]}
       end
     end)
-    |> then(fn x -> [catch: x] end)
   end
 
   ### Variables
@@ -393,33 +353,33 @@ defmodule Tria.Compiler.AbstractTranslator do
     |> String.downcase()
     |> String.split("@")
     |> case do
+      ["_"] ->
+        {:_, meta(anno), nil}
+
+      [strname] ->
+        {atomify_varname(strname), [], nil}
+
       ["_", context] ->
         do_traverse_variable(:_, anno, context)
 
       ["_" <> strname, context] ->
         do_traverse_variable(String.to_atom(strname), anno, context)
 
-      [strname, context]
+      [strname, context | _] ->
         do_traverse_variable(String.to_atom(strname), anno, context)
-
-      ["_"] ->
-        {:_, meta(anno), nil}
-
-      [strname] ->
-        {atomify_varname(strname), [], nil}
     end
   end
 
   defp do_traverse_variable(name, anno, context) do
     case {name, Integer.parse(context)} do
       {:_, {integer, ""}} ->
-        {:underscore, [counter: integer] ++ meta(anno), nil}
+        {:underscore, meta(anno), integer}
 
       {:_, :error} ->
         {atomify_varname(context), meta(anno), :underscore}
 
       {_, {integer, ""}} ->
-        {atomify_varname(name), [counter: integer] ++ meta(anno), nil}
+        {atomify_varname(name), meta(anno), integer}
 
       _ ->
         {atomify_varname(name), meta(anno), String.to_atom(context)}
@@ -454,7 +414,7 @@ defmodule Tria.Compiler.AbstractTranslator do
   defp add_res_to_clauses(clauses) do
     [last | rev_tail] = Enum.reverse(clauses)
     res = {:res, [], gen_uniq_context()}
-    last = quote do: unquote(res) = unquote(last)
+    last = {:=, [], [res, last]}
     {res, Enum.reverse([last | rev_tail])}
   end
 
@@ -476,8 +436,10 @@ defmodule Tria.Compiler.AbstractTranslator do
     div:     {Kernel,  :div},
     rem:     {Kernel,  :rem},
     not:     {Kernel,  :not},
-    orelse:  {Kernel,  :or},
-    andalso: {Kernel,  :and},
+    # orelse:  {Kernel,  :or},
+    # andalso: {Kernel,  :and},
+    orelse:  {:erlang, :orelse},
+    andalso: {:erlang, :andalso},
     and:     {:erlang, :and},
     or:      {:erlang, :or},
     xor:     {:erlang, :xor},
@@ -493,23 +455,15 @@ defmodule Tria.Compiler.AbstractTranslator do
   }
   @kernel_ops for {_, {Kernel, op}} <- @op_map, do: op
 
-  defp traverse_op(op, _anno, args) do
+  defp traverse_op(op, anno, args) do
     %{^op => {m, f}} = @op_map
-    dot_call(m, f, args)
+    dot_call(m, f, args, meta(anno), meta(anno))
   end
 
   ### Guards
 
   defp traverse_guard(guard) do
-    guard
-    |> traverse()
-    |> prewalk(fn
-      dot_call(Kernel, op, args) when op in @kernel_ops ->
-        {op, [], args}
-
-      other ->
-        other
-    end)
+    traverse guard
   end
 
   ### Exceptions
@@ -519,13 +473,14 @@ defmodule Tria.Compiler.AbstractTranslator do
       Enum.reject(parts, fn
         {_, {:__block__, [], []}} -> true
         {:after, none} when is_atom(none) or none == [] -> true
-        {part, []} when part in ~w[rescue catch else]a -> true
+        {part, []} when part in ~w[catch else]a -> true
         _ -> false
       end)
 
     {:try, meta, [parts]}
   end
 
+  defp replace_stacktrace(body, {:_, _, _context}), do: body
   defp replace_stacktrace(body, {name, _, context}) do
     prewalk(body, fn
       {^name, _, ^context} -> quote do: __STACKTRACE__
@@ -535,11 +490,11 @@ defmodule Tria.Compiler.AbstractTranslator do
 
   ### Metadata
 
-  defp meta(line) when is_integer(line), do: [line: line]
-  defp meta({line, column}) do
+  def meta(line) when is_integer(line), do: [line: line]
+  def meta({line, column}) do
     [line: line, column: column]
   end
-  defp meta(keyword) when is_list(keyword) do
+  def meta(keyword) when is_list(keyword) do
     keyword
     |> Keyword.drop(~w[record text]a)
     |> meta_location()
@@ -575,7 +530,7 @@ defmodule Tria.Compiler.AbstractTranslator do
     {op, [], [f.(head), join(tail, op, f)]}
   end
 
-  defp pin(var, _anno) when is_variable(var), do: {:"^", [], [var]}
+  defp pin(var, anno) when is_variable(var), do: {:"^", meta(anno), [var]}
   defp pin(other, _anno), do: other
 
   defp erlang_funcs do
@@ -587,6 +542,22 @@ defmodule Tria.Compiler.AbstractTranslator do
 
       erlang_funcs ->
         erlang_funcs
+    end
+  end
+
+  defp module_for_fa(function, arity) do
+    module_for_fa {function, arity}
+  end
+  defp module_for_fa({function, arity} = farity) when is_atom(function) and is_integer(arity) do
+    cond do
+      farity in Process.get(:locals, []) ->
+        nil # Process.get(:env, [])[:module]
+
+      farity in erlang_funcs() ->
+        :erlang
+
+      true ->
+        Process.get(:env, %{module: nil}).module
     end
   end
 end

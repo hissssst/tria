@@ -8,6 +8,7 @@ defmodule Tria.Debug.Tracer do
   """
 
   import Tria.Language, only: [ast_to_string: 2], warn: false
+  alias Tria.Language.MFArity
   # import Tria.Compiler, only: [fname: 1]
 
   @doc """
@@ -50,9 +51,16 @@ defmodule Tria.Debug.Tracer do
   """
   def with_local_trace(key, func) do
     old = Process.put(:local_trace, key)
+    pid =
+      spawn fn ->
+        Process.sleep :timer.seconds 5
+        MFArity.inspect(key, label: :takes_too_long)
+      end
+
     try do
       func.()
     after
+      Process.exit(pid, :kill)
       old && Process.put(:local_trace, old) || Process.delete(:local_trace)
     end
   end
@@ -61,18 +69,11 @@ defmodule Tria.Debug.Tracer do
   defp do_trace({module, _kind, function, arity}, data, inspector, label) do
     do_trace({module, function, arity}, data, inspector, label)
   end
-  defp do_trace({module, function, arity} = mfarity, data, inspector, label) do
-    with %{only: labels} <- :persistent_term.get({__MODULE__, mfarity}, nil) do
-      if right_label?(label, labels) do
-        print(label, "#{module}.#{function}/#{arity}", inspector, data)
-      end
-    end
-  end
   defp do_trace(fname, data, inspector, label) when is_atom(fname) do
     case :persistent_term.get({__MODULE__, fname}, nil) do
-      %{mfarity: {module, function, arity}, only: labels} ->
+      %{mfarity: mfarity, only: labels} ->
         if right_label?(label, labels) do
-          print(label, "#{module}.#{function}/#{arity}", inspector, data)
+          print(label, MFArity.to_string(mfarity), inspector, data)
         end
 
       %{only: labels} ->
@@ -82,6 +83,13 @@ defmodule Tria.Debug.Tracer do
 
       _ ->
         nil
+    end
+  end
+  defp do_trace(mfarity, data, inspector, label) do
+    with %{only: labels} <- :persistent_term.get({__MODULE__, mfarity}, nil) do
+      if right_label?(label, labels) do
+        print(label, MFArity.to_string(mfarity), inspector, data)
+      end
     end
   end
 
