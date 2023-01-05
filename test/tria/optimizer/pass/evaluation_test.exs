@@ -1252,7 +1252,26 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         end
       end
       |> run_while()
-      |> inspect_ast(label: :result)
+      |> assert_tri do
+        try do
+          URI.decode_www_form(value)
+        catch
+          :error, :badarg ->
+            :erlang.error(_)
+        else
+          binary ->
+            case validate_utf8 do
+              true ->
+                Kernel.throw :oops
+                # Plug.Conn.Utils.validate_utf8!(binary, invalid_exception, "urlencoded params")
+
+              _ ->
+                nil
+            end
+
+            binary
+        end
+      end
     end
   end
 end
