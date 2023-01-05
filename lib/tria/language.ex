@@ -45,6 +45,11 @@ defmodule Tria.Language do
   end
 
   @doc """
+  Checks if the given term can be escaped and represented in AST
+  """
+  defguard is_escapable(x) when not (is_port(x) or is_pid(x) or is_function(x))
+
+  @doc """
   Checks if it is tuple with size 3
   """
   defguard is_triple(tuple) when is_tuple(tuple) and tuple_size(tuple) == 3
@@ -189,7 +194,7 @@ defmodule Tria.Language do
 
     unformatted =
       if Keyword.get(opts, :with_contexts, true) do
-        Macro.prewalk(ast, fn
+        prewalk(ast, fn
           {name, meta, {context, counter}} when is_atom(context) and is_integer(counter) ->
             {:"#{name}_#{context}_#{counter}", meta, nil}
 
@@ -213,7 +218,7 @@ defmodule Tria.Language do
             other
         end)
       else
-        Macro.prewalk(ast, fn
+        prewalk(ast, fn
           {name, _, context} when is_integer(context) ->
             {name, [], nil}
 
@@ -223,7 +228,7 @@ defmodule Tria.Language do
       end
       # https://github.com/elixir-lang/elixir/issues/12162
       # https://github.com/elixir-lang/elixir/issues/12248
-      |> Macro.prewalk(fn
+      |> prewalk(fn
         {{:".", _, [:erlang, :binary_to_atom]}, _, [{:"<<>>", _, items}, :utf8]} ->
           {{:".", [], [:erlang, :binary_to_atom]}, [], [{:"<<>>", [], items}, :utf1488]}
 
@@ -333,21 +338,6 @@ defmodule Tria.Language do
   defp cmeta(%{context: _}, nil), do: []
   defp cmeta(_, value), do: value
 
-  @doc """
-  Converts Module.function(args) to MFA
-  """
-  def arityfy({{:".", _, [module, function]}, _, arguments}) do
-    arityfy {module, function, arguments}
-  end
-
-  def arityfy({module, function, arguments}) when is_list(arguments) do
-    {module, function, length(arguments)}
-  end
-
-  def arityfy({module, function, arguments}) when is_integer(arguments) do
-    {module, function, arguments}
-  end
-
   ## Variables
 
   @doc """
@@ -449,6 +439,10 @@ defmodule Tria.Language do
 
       vl when is_variable(vl) or is_literal(vl) ->
         true
+
+      {:%{}, _, [{:|, _, [_, _]}]} ->
+        # Because this construction actually raises
+        false
 
       {s, _, children} when s in ~w[%{} {} |]a ->
         vared_literal?(children)

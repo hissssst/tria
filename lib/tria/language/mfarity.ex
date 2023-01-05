@@ -43,6 +43,7 @@ defmodule Tria.Language.MFArity do
           and element(element(t, 0), 0) == :.
           and is_list(element(element(t, 0), 1))
           and is_list(element(element(t, 0), 2))
+          and length(element(element(t, 0), 2)) == 2
         )
 
   ## Converters

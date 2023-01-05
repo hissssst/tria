@@ -10,6 +10,7 @@ defmodule Tria.Language.Codebase do
   # to avoid garbage in enviroment
 
   import Tria.Language
+  import Tria.Language.MFArity, only: [is_mfarity: 1]
 
   alias Tria.Language.MFArity
   alias Tria.Language.FunctionRepo
@@ -19,7 +20,6 @@ defmodule Tria.Language.Codebase do
   @type chunk :: atom() | charlist()
 
   @typedoc "Module.function/arity or list of arguments"
-  @type mfargs :: {module(), atom(), arity() | [Tria.t()]}
 
   # BEAM chunks
 
@@ -86,33 +86,42 @@ defmodule Tria.Language.Codebase do
   @doc """
   Wrapper to fetch `tria` code for mfa
   """
-  @spec fetch_tria(mfargs()) :: Tria.t() | nil
-  def fetch_tria(mfa) do
-    {module, _name, _arity} = MFArity.to_mfarity(mfa)
-    with nil <- FunctionRepo.lookup(mfa, :tria) do
-      case fetch_abstract(mfa) do
+  @spec fetch_tria(MFArity.mfarity()) :: Tria.t() | nil
+  def fetch_tria({module, _, _} = mfarity) when is_mfarity(mfarity) do
+    with nil <- FunctionRepo.lookup(mfarity, :tria) do
+      case fetch_abstract(mfarity) do
         nil -> nil
         abstract ->
           clauses = AbstractTranslator.to_tria!(abstract, env: empty_env(module))
-          FunctionRepo.insert(mfa, :tria, {:fn, [], clauses})
+          FunctionRepo.insert(mfarity, :tria, {:fn, [], clauses})
       end
     end
   rescue
     e ->
-      MFArity.inspect(mfa, label: :failed_abstract_translation_of)
+      MFArity.inspect(mfarity, label: :failed_abstract_translation_of)
       reraise e, __STACKTRACE__
+  end
+
+  @doc """
+  Fetches tria, but without top-level `fn`, only the list of bodies
+  """
+  @spec fetch_tria_bodies(MFArity.mfarity()) :: [Tria.t()] | nil
+  def fetch_tria_bodies(mfarity) do
+    with {:fn, _, clauses} <- fetch_tria(mfarity) do
+      :lists.map(fn {:"->", _, [_, body]} -> body end, clauses)
+    end
   end
 
   @doc """
   Fetches abstract_code for mfa but also performs caching of already
   request abstract_codes
   """
-  @spec fetch_abstract(mfargs()) :: :compile.forms() | nil
+  @spec fetch_abstract(MFArity.mfarity()) :: :compile.forms() | nil
   # Guarded because I want to raise ASAP
-  def fetch_abstract({module, _, _} = mfa) when is_atom(module) do
-    with nil <- FunctionRepo.lookup(mfa, :abstract) do
+  def fetch_abstract({module, _, _} = mfarity) when is_mfarity(mfarity) do
+    with nil <- FunctionRepo.lookup(mfarity, :abstract) do
       prefetch_clauses(module)
-      fetch_abstract_from_db(mfa)
+      fetch_abstract_from_db(mfarity)
     end
   end
 
@@ -167,8 +176,8 @@ defmodule Tria.Language.Codebase do
   ### Helpers
 
   # Fetches straight from the cache
-  defp fetch_abstract_from_db(mfa) do
-    FunctionRepo.lookup(mfa, :abstract)
+  defp fetch_abstract_from_db(mfarity) do
+    FunctionRepo.lookup(mfarity, :abstract)
   end
 
   # Warms up the cache

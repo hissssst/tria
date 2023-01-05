@@ -25,13 +25,13 @@ before publishing this project to open source
 
 [x] Purity check tests
 
-[ ] Deduplication of mfarity
+[x] Deduplication of mfarity
 
-[ ] Raising check implementation
+[x] Raising check implementation
 
-[ ] Raising check tests
+[x] Raising check tests
 
-[ ] Raising check integration to Evaluation pass
+[x] Raising check integration to Evaluation pass
 
 [ ] Tria.Optimizer assurance tests
 Tests which just check that original code
@@ -43,9 +43,9 @@ returns the same thing as the optimized code
 
 [x] Passes tests on some external project correctly
 
-[ ] Passes tests on some big external project correctly
+[x] Passes tests on some big external project correctly
 
-[ ] Passes tests on phoenix
+[x] Passes tests on phoenix
 
 ---
 

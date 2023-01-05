@@ -5,17 +5,19 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   can be preevaluated
   """
 
+  use Tria.Optimizer.Pass
   import Tria.Language
+  import Tria.Language.Analyzer, only: [is_pure: 1, is_safe: 1]
   import Tria.Language.Binary, only: [traverse_specifier: 3]
   import Tria.Language.Guard
-  import Tria.Language.Tri
   import Tria.Language.Meta
-  import Tria.Language.Analyzer, only: [is_pure: 1]
+  import Tria.Language.Tri
   alias Tria.Compiler.SSATranslator
   alias Tria.Debug.Tracer
+  alias Tria.Language.Analyzer.Purity
   alias Tria.Language.Bindmap
   alias Tria.Language.Interpreter
-  alias Tria.Language.Analyzer.Purity
+  alias Tria.Language.MFArity
 
   defstruct [
     # Runtime variable which is passed during traversal.
@@ -47,23 +49,21 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   | {:inspect_iteration, atom()}
   | {:state, state()}
 
-  ## Public API
+  ## Pass callbacks
 
-  @spec run_while(Tria.t(), [option()]) :: Tria.t()
-  def run_while(ast, opts \\ []) do
-    Tracer.tag_ast(ast, label: :evaluation_run_while)
-    if label = opts[:inspect_iteration], do: inspect_ast(ast, label: label)
-    case run_once(ast, opts) do
-      {:ok, new_ast} ->
-        run_while(new_ast, opts)
-
-      {:error, :nothing_to_evaluate} ->
-        ast
-    end
+  def begin(ast, _opts) do
+    {:ok, ast}
   end
 
-  @spec run_once(Tria.t(), [option()]) :: {:ok, Tria.t()} | {:error, :nothing_to_evaluate}
+  def finish(ast, _opts) do
+    {:ok, ast}
+  end
+
+  ## Public API
+
+  @spec run_once(Tria.t(), [option()]) :: {:ok, Tria.t()} | {:error, :nothing_to_optimize}
   def run_once(ssa_ast, opts \\ []) do
+    Tracer.tag_ast(ssa_ast, label: :evaluation_run_once)
     state = opts_to_state(opts)
     {result, state} = run(ssa_ast, state)
     {result, state} =
@@ -75,7 +75,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
       end
 
     case state do
-      %{hit: false} -> {:error, :nothing_to_evaluate}
+      %{hit: false} -> {:error, :nothing_to_optimize}
       _ -> {:ok, result}
     end
   end
@@ -159,24 +159,24 @@ defmodule Tria.Optimizer.Pass.Evaluation do
               is_fn(line) or vared_literal?(line) ->
                 {[], hit state}
 
-              # is_pure(line) ->
-              #   # Binds must be in the correct order
-              #   {_, binds} =
-              #     prewalk(line, [], fn
-              #       tri(_key = value) = match, acc when is_fn(value) ->
-              #         {nil, [match | acc]}
+              is_pure(line) and is_safe(line) ->
+                # Binds must be in the correct order
+                {_, binds} =
+                  prewalk(line, [], fn
+                    tri(_key = value) = match, acc when is_fn(value) ->
+                      {nil, [match | acc]}
 
-              #       tri(_key = _value) = match, acc ->
-              #         {match, [match | acc]}
+                    tri(_key = _value) = match, acc ->
+                      {match, [match | acc]}
 
-              #       the_fn, acc when is_fn(the_fn) ->
-              #         {nil, acc}
+                    the_fn, acc when is_fn(the_fn) ->
+                      {nil, acc}
 
-              #       other, acc ->
-              #         {other, acc}
-              #     end)
+                    other, acc ->
+                      {other, acc}
+                  end)
 
-              #   {:lists.reverse(binds), hit state}
+                {:lists.reverse(binds), hit state}
 
               true ->
                 {[line], state}
@@ -187,18 +187,17 @@ defmodule Tria.Optimizer.Pass.Evaluation do
 
       # Try
       {:try, meta, [[{:do, body} | other]]} = the_try ->
-        body_pure = is_pure(body)
+        safe_and_pure = is_pure(body) and is_safe(body)
         cond do
-          body_pure and other[:else] in [nil, []] ->
+          safe_and_pure and (other[:else] in [nil, []]) ->
             { body, hit state }
 
-          body_pure ->
+          safe_and_pure ->
             run({:case, meta, [body, [do: other[:else]]]}, hit state)
 
           true ->
             run_try(the_try, state)
         end
-        run_try(the_try, state)
 
       # Receive
       {:receive, meta, [[do: clauses]]} ->
@@ -434,6 +433,11 @@ defmodule Tria.Optimizer.Pass.Evaluation do
 
         {:clauses, clauses, state}
     end
+  rescue
+    e ->
+      {:case, [], [args, [do: clauses]]}
+      |> inspect_ast(label: :failed)
+      reraise e, __STACKTRACE__
   end
 
   def run_guard(ast, state) do
@@ -586,8 +590,9 @@ defmodule Tria.Optimizer.Pass.Evaluation do
           with(
             1 <- count_used(state, variable),
             {:ok, value} <- fetch_bind(state, variable),
-            true <- is_fn(value) or vared_literal?(value) or is_pure(value)
+            true <- is_fn(value) or vared_literal?(value) or (is_pure(value) and is_safe(value))
           ) do
+            value = SSATranslator.from_tria!(value)
             { value, hit delete_used(new_state, variable) }
           else
             _ -> { variable, new_state }
@@ -621,15 +626,22 @@ defmodule Tria.Optimizer.Pass.Evaluation do
     ) do
       Tracer.tag_ast(dot_call(module, function, args), label: :precomputed_from)
       Tracer.tag(result, label: :precomputed_to)
-      case bindings do
-        [] ->
-          state = put_evaluated(state, dc)
-          {Macro.escape(result), hit(state)}
+      try do
+        Macro.escape(result)
+      rescue
+        _ -> {dc, state}
+      else
+        result ->
+          case bindings do
+            [] ->
+              state = put_evaluated(state, dc)
+              {result, hit(state)}
 
-        bindings ->
-          state = put_evaluated(state, dc)
-          block = {:__block__, [], Enum.map(bindings, fn {key, value} -> tri(key = value) end) ++ [result]}
-          {block, hit(state)}
+            bindings ->
+              state = put_evaluated(state, dc)
+              block = {:__block__, [], Enum.map(bindings, fn {key, value} -> tri(key = value) end) ++ [result]}
+              {block, hit(state)}
+          end
       end
     else
       _ -> {dc, state}
@@ -680,7 +692,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   end
 
   defp put_evaluated(%{evaluated: evaluated} = state, call) do
-    %{state | evaluated: MapSet.put(evaluated, arityfy call)}
+    %{state | evaluated: MapSet.put(evaluated, MFArity.to_mfarity(call))}
   end
 
   defp put_used(%{used: used} = state, key) do

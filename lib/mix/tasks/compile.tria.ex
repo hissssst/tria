@@ -11,7 +11,7 @@ defmodule Mix.Tasks.Compile.Tria do
     # manifest_path = Mix.Project.manifest_path(mix_config)
 
     [
-      {Plug.Debugger, :template_markdown, 1},
+      {Plug.Router.Utils, :build_path_params_match, 2}
     ]
     |> Enum.map(&Tracer.trace(&1, only: :all))
 

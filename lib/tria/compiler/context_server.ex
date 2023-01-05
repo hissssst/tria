@@ -124,12 +124,16 @@ defmodule Tria.Compiler.ContextServer do
       IO.warn "The context module already exists"
     end
 
-    quote do
-      defmodule unquote state.name do
-        unquote_splicing funcs
+    module =
+      quote do
+        defmodule unquote state.name do
+          unquote_splicing funcs
+        end
       end
-    end
-    |> Compiler.compile_quoted("#{state.name}.ex")
+
+    File.write!("tria_global_context.ex", ast_to_string(module))
+
+    Compiler.compile_quoted(module, "#{state.name}.ex")
   end
 
   defp definitions_to_funcs(definitions) do
@@ -147,7 +151,7 @@ defmodule Tria.Compiler.ContextServer do
           Tracer.with_local_trace({module, name, arity}, fn ->
             the_fn
             |> Tracer.tag_ast(label: :before_passes)
-            |> Optimizer.run()
+            |> Optimizer.run(remove_unused: false)
             |> contextify_local_calls(definitions)
             |> Tracer.tag_ast(label: :generating)
             |> Compiler.fn_to_clauses()

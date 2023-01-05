@@ -8,10 +8,10 @@ defmodule Tria.Language.FunctionRepo do
 
   use GenServer
 
-  import Tria.Language
+  alias Tria.Language.MFArity
   alias Tria.Language.FunctionRepo.Persister
 
-  @persistent_traits ~w[pure pure_cache]a
+  @persistent_traits ~w[pure pure_cache safe_cache]a
 
   @typedoc "Traits can be only atoms"
   @type trait :: atom()
@@ -36,7 +36,7 @@ defmodule Tria.Language.FunctionRepo do
   def insert(mfa, trait, entry) do
     trait
     |> ensure_exists()
-    |> :ets.insert({arityfy(mfa), entry})
+    |> :ets.insert({MFArity.to_mfarity(mfa), entry})
 
     entry
   end
@@ -46,7 +46,7 @@ defmodule Tria.Language.FunctionRepo do
   def fetch(mfa, trait) do
     trait
     |> ensure_exists()
-    |> :ets.lookup(arityfy mfa)
+    |> :ets.lookup(MFArity.to_mfarity mfa)
     |> case do
       [{_, entry}] -> {:ok, entry}
       _ -> :error
@@ -58,7 +58,7 @@ defmodule Tria.Language.FunctionRepo do
   def lookup(mfa, trait) do
     trait
     |> ensure_exists()
-    |> :ets.lookup(arityfy mfa)
+    |> :ets.lookup(MFArity.to_mfarity mfa)
     |> case do
       [{_, entry}] -> entry
       _ -> nil

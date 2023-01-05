@@ -161,8 +161,13 @@ defmodule Tria.Optimizer.Pass.EnumFusionTest do
       |> run_while()
       |> unmeta()
       |> assert_tri do
-        Enum.map(list, fn x -> (x + 1) * 2 end)
+        Enum.map(list, fn x1 ->
+          x2 = x1 + 1
+          x2 * 2
+        end)
       end
+
+      assert_unique [x1, x2]
     end
 
     test "map and each" do
@@ -174,8 +179,13 @@ defmodule Tria.Optimizer.Pass.EnumFusionTest do
       |> run_while()
       |> unmeta()
       |> assert_tri do
-        Enum.each(list, fn x -> (x + 1) * 2 end)
+        Enum.each(list, fn x1 ->
+          x2 = x1 + 1
+          x2 * 2
+        end)
       end
+
+      assert_unique [x1, x2]
     end
 
     test "flat_map and flat_map" do
@@ -228,8 +238,13 @@ defmodule Tria.Optimizer.Pass.EnumFusionTest do
       |> run_while()
       |> unmeta()
       |> assert_tri do
-        Enum.reduce(list, [], fn x, acc -> [x + 1 | acc] end)
+        Enum.reduce(list, [], fn x1, acc ->
+          x2 = x1 + 1
+          [x2 | acc]
+        end)
       end
+
+      assert_unique [x1, x2]
     end
 
     test "filter and reduce" do

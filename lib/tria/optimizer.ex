@@ -24,7 +24,7 @@ defmodule Tria.Optimizer do
   defp run_while(ast, opts) do
     ast
     |> Evaluation.run_while(opts)
-    # |> EnumFusion.run_while()
+    |> EnumFusion.run_while(opts)
     # |> Evaluation.run_while()
   end
 

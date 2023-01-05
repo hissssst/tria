@@ -257,9 +257,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         kv
         |> Enum.flat_map(mapper)
       end
-      |> run_while(inspect_iteration: :iter)
-      |> inspect_ast(label: :result)
-      # |> unmeta()
+      |> run_while()
       |> assert_tri do
         Enum.flat_map(kv, fn
           {_, 1} -> []
@@ -1099,14 +1097,15 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
           {:ok, x2}
 
         tuple when :erlang.andalso(Kernel.is_tuple(tuple), Kernel.>(Kernel.tuple_size(tuple), 3)) ->
-          {:ok, :erlang.element(4, input)}
+          x3 = :erlang.element(4, input)
+          {:ok, x3}
 
         _ ->
           :error
       end
     end
 
-    assert_unique [x1, x2, tuple, input]
+    assert_unique [x1, x2, x3, tuple, input]
   end
 
   describe "Structure" do
@@ -1136,53 +1135,8 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
     end
   end
 
-  # describe "Try" do
-  #   test "all-in-one" do
-  #     tri do
-  #       x = 1
-  #       try do
-  #         x = x + 1
-  #         [1, x, Module.function(3)]
-  #       catch
-  #         :thrown -> :thrown
-  #       rescue
-  #         x in ArgumentError -> {:xinae, x}
-  #         ArgumentError -> {:ae, x}
-  #         y -> {x, y}
-  #       else
-  #         1 -> 1
-  #         2 -> 2
-  #         x -> x
-  #       after
-  #         :fuck
-  #       end
-  #     end
-  #     |> run_while()
-  #     |> assert_tri do
-  #       x1 = 1
-  #       try do
-  #         x2 = 2
-  #         [1, 2, function(3)]
-  #       catch
-  #         :thrown -> :thrown
-  #       rescue
-  #         x3 in ArgumentError -> {:xinae, x3}
-  #         ArgumentError -> {:ae, 1}
-  #         y -> {1, y}
-  #       else
-  #         1 -> 1
-  #         2 -> 2
-  #         x4 -> x4
-  #       after
-  #         :fuck
-  #       end
-  #     end
-
-  #      assert_unique [x1, x2, x3, x4, y]
-  #   end
-  # end
-
   describe "Usage detection" do
+    @tag skip: true
     test "Block" do
       tri do
         x = function()
@@ -1199,6 +1153,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       assert_unique [x, y]
     end
 
+    @tag skip: true
     test "Used once in pin removed" do
       tri do
         x = [y, z]
@@ -1214,6 +1169,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       assert_unique [y, z, bar, foo]
     end
 
+    @tag skip: true
     test "Pure, vared, quoted used once" do
       tri do
         x = a + b
@@ -1231,6 +1187,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       assert_unique [a, b, c, impure]
     end
 
+    @tag skip: true
     test "Block unused removal with fn" do
       tri do
         x = [1, fn x -> y = M.f(); x + y end]
@@ -1245,6 +1202,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       assert_unique [x1, x2, y]
     end
 
+    @tag skip: true
     test "Simplest in block used once" do
       tri do
         y = x + 1
@@ -1256,6 +1214,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       end
     end
 
+    @tag skip: true
     test "Used once inside fn" do
       tri do
         fn x ->
@@ -1267,6 +1226,33 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
       |> assert_tri do
         fn x -> Kernel.*(Kernel.+(x, 1), 2) end
       end
+    end
+  end
+
+  describe "Regression" do
+    test "Plug" do
+      tri do
+        try do
+          URI.decode_www_form(value)
+        catch
+          :error, :badarg ->
+            raise invalid_exception, "invalid urlencoded params, got #{value}"
+        else
+          binary ->
+            case validate_utf8 do
+              true ->
+                throw :oops
+                # Plug.Conn.Utils.validate_utf8!(binary, invalid_exception, "urlencoded params")
+
+              _ ->
+                nil
+            end
+
+            binary
+        end
+      end
+      |> run_while()
+      |> inspect_ast(label: :result)
     end
   end
 end

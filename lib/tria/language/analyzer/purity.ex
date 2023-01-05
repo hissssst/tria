@@ -10,9 +10,9 @@ defmodule Tria.Language.Analyzer.Purity do
   """
 
   import Tria.Language
-  import Tria.Language.Meta
   import Tria.Language.MFArity, only: :macros
 
+  alias Tria.Debug.Tracer
   alias Tria.Language.MFArity
   alias Tria.Language.Interpreter
   alias Tria.Language.{Codebase, FunctionRepo}
@@ -78,6 +78,10 @@ defmodule Tria.Language.Analyzer.Purity do
       {:receive, _, _} ->
         throw false
 
+      # Optimization to not waste time on analysis of patterns
+      {op, _, [_, body]} when op in ~w[-> = <-]a ->
+        body
+
       # Called to variables are considered impure
       dot_call(_, _) ->
         throw false
@@ -103,49 +107,48 @@ defmodule Tria.Language.Analyzer.Purity do
 
   ### Helpers
 
-  # This functions chechs whether the mfargs is pure or not
+  # This functions checks whether the mfargs is pure or not
   @spec lookup(MFArity.mfargs(), stack()) :: boolean()
-  defp lookup({_, f, _}, [{module, function, arity} = mfa | stack]) when is_variable(f) do
-    with nil <- do_lookup(mfa, stack) do
+  defp lookup({_, f, _}, [{module, function, arity} = mfarity | stack]) when is_variable(f) do
+    with nil <- do_lookup(mfarity, stack) do
       pure? = Provider.is_pure({module, function, List.duplicate(nil, arity)}, stack: stack, show: true)
-      FunctionRepo.insert(mfa, :pure, pure?)
+      FunctionRepo.insert(mfarity, :pure, pure?)
     end
   end
   defp lookup(mfargs, stack) when is_mfargs(mfargs) do
-    mfarity = MFArity.to_mfarity(mfargs)
+    {module, function, arity} = mfarity = MFArity.to_mfarity(mfargs)
     with nil <- do_lookup(mfarity, stack) do
-      dotted = MFArity.to_dotcall(mfargs)
-      case unmeta Codebase.fetch_tria mfargs do
+      case Codebase.fetch_tria_bodies mfarity do
         # No function found
         nil ->
           pure? = Provider.is_pure(mfargs, stack: stack)
-          FunctionRepo.insert(mfargs, :pure, pure?)
+          FunctionRepo.insert(mfarity, :pure, pure?)
 
         # Is a NIF or BIF function
-        {:fn, _, [{:"->", _, [_, dot_call(:erlang, :nif_error, _)]}]} ->
+        [dot_call(:erlang, :nif_error, _)] ->
           pure? = Provider.is_pure(mfargs, stack: stack)
-          FunctionRepo.insert(mfargs, :pure, pure?)
+          FunctionRepo.insert(mfarity, :pure, pure?)
 
-        # Is an Elixir bootstrap
-        {:fn, _, [{:"->", _, [_, ^dotted]}]} ->
+        # Single clause function which calls itself is recursively defined
+        # So we better ask
+        [dot_call(^module, ^function, args)] when length(args) == arity ->
           pure? = Provider.is_pure(mfargs, stack: stack)
-          FunctionRepo.insert(mfargs, :pure, pure?)
+          FunctionRepo.insert(mfarity, :pure, pure?)
 
         # Anything else, and for this we don't insert the purity check
-        # TODO maybe move this in cache
-        {:fn, _, clauses}->
-          res =
-            clauses
-            |> Enum.map(fn {:"->", _, [_, body]} -> body end)
-            |> check_analyze([mfarity | stack])
-          FunctionRepo.insert(mfargs, :pure_cache, res)
+        bodies ->
+          pure? = check_analyze(bodies, [mfarity | stack])
+          FunctionRepo.insert(mfarity, :pure_cache, pure?)
       end
     end
   end
   defp lookup({_m, _f, _a}, _stack), do: false
 
   defp do_lookup({module, function, arity} = mfarity, stack) do
-    MFArity.inspect(mfarity, label: :looking_up)
+    mfarity
+    |> MFArity.to_string()
+    |> Tracer.tag(label: :purity_lookup, key: mfarity)
+
     with(
       false <- :erl_bifs.is_pure(module, function, arity),
       false <- :erl_bifs.is_exit_bif(module, function, arity),
@@ -157,7 +160,7 @@ defmodule Tria.Language.Analyzer.Purity do
     ) do
       nil
     end
-    |> IO.inspect(label: MFArity.to_string mfarity)
+    |> Tracer.tag(label: :purity_lookup_result, key: mfarity)
   end
 
   defp fetch_effects() do

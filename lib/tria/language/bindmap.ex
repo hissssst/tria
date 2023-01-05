@@ -43,7 +43,14 @@ defmodule Tria.Language.Bindmap do
   def merge!(left, right) do
     Map.merge(left, right, fn
       _, v, v -> v
-      k, l, r -> raise ArgumentError, message: "Bindmaps have a conflicting key #{inspect k} with #{inspect l} vs #{inspect r}"
+      k, l, r ->
+        if unmeta(l) != unmeta(r) do
+          raise ArgumentError, message: "Bindmaps have a conflicting key"
+          <> " #{inspect k, pretty: true}"
+          <> " with #{ast_to_string l} vs #{ast_to_string r}"
+        else
+          l
+        end
     end)
   end
 
