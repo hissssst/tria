@@ -20,7 +20,6 @@ defmodule Tria.Language do
   end
 
   import Tria.Language.Binary
-  alias Tria.Compiler.SSATranslator
 
   # These special forms are variables, but they can be assigned to, only used
   @special_vars ~w[__CALLER__ __DIR__ __ENV__ __MODULE__ __STACKTRACE__]a
@@ -85,6 +84,11 @@ defmodule Tria.Language do
            when is_tuple(t) and
                   tuple_size(t) == 3 and
                   is_variable(element(t, 0), element(t, 1), element(t, 2))
+
+  defguard same_variable?(left, right)
+           when is_variable(left) and is_variable(right)
+           and element(left, 0) == element(right, 0)
+           and element(left, 2) == element(right, 2)
 
   @doc """
   Checks if given AST is a Tria variable (with integer or atom in context field)
@@ -266,7 +270,7 @@ defmodule Tria.Language do
 
   - `:with_contexts` - display contexts next to variables
   - `:label` - inspect with label
-  - `:highlight_line` - highline line
+  - `:highlight_line` - wraps given line into `HERE_HITS()` pseudo call
   """
   @spec inspect_ast(ast :: Tria.t(), Keyword.t()) :: Macro.t()
   def inspect_ast(ast, opts \\ []) do
@@ -354,8 +358,7 @@ defmodule Tria.Language do
   """
   @spec gen_uniq_var() :: Tria.variable()
   def gen_uniq_var do
-    # `triau` stands for Tria Unique
-    {:triau, [], gen_uniq_context()}
+    {:tria_unique, [], gen_uniq_context()}
   end
 
   @doc """

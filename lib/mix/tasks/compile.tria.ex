@@ -1,4 +1,5 @@
 defmodule Mix.Tasks.Compile.Tria do
+
   use Mix.Task.Compiler
 
   alias Tria.Compiler
@@ -8,10 +9,9 @@ defmodule Mix.Tasks.Compile.Tria do
     Mix.Project.get!() # Just to make sure that project exists
     mix_config = Mix.Project.config()
     Mix.Project.ensure_structure(mix_config)
-    # manifest_path = Mix.Project.manifest_path(mix_config)
 
     [
-      {Plug.Router.Utils, :build_path_params_match, 2}
+      # Write MFAs you want to trace here
     ]
     |> Enum.map(&Tracer.trace(&1, only: :all))
 

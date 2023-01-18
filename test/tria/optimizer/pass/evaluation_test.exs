@@ -247,7 +247,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
           {field, value} ->
             field =
               case parent_field do
-                "" -> encode_key(field)
+                "" -> field
                 _ -> parent_field
               end
 
@@ -266,7 +266,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
               38,
               encode_pair(
                 case parent_field do
-                  "" -> encode_key(field)
+                  "" -> field
                   _ -> parent_field
                 end,
                 value,
@@ -1242,7 +1242,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
             case validate_utf8 do
               true ->
                 throw :oops
-                # Plug.Conn.Utils.validate_utf8!(binary, invalid_exception, "urlencoded params")
 
               _ ->
                 nil
@@ -1263,7 +1262,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
             case validate_utf8 do
               true ->
                 Kernel.throw :oops
-                # Plug.Conn.Utils.validate_utf8!(binary, invalid_exception, "urlencoded params")
 
               _ ->
                 nil

@@ -126,7 +126,7 @@ defmodule Tria.Compiler.SSATranslator do
 
       # Fn
       {:fn, meta, clauses} ->
-        clauses = run_clauses(clauses, translations)
+        clauses = run_fn_clauses(clauses, translations)
         { {:fn, meta, clauses}, translations }
 
       # For
@@ -273,6 +273,14 @@ defmodule Tria.Compiler.SSATranslator do
   defp run_clauses(clauses, translations) do
     Enum.map(clauses, fn {:"->", meta, [left, right]} ->
       {left, left_translations} = propagate_to_pattern(left, translations)
+      {right, _} = run(right, translations <~ left_translations)
+      {:"->", meta, [left, right]}
+    end)
+  end
+
+  defp run_fn_clauses(clauses, translations) do
+    Enum.map(clauses, fn {:"->", meta, [left, right]} ->
+      {left, left_translations} = propagate_to_pattern(left, %__MODULE__{translations | pin_known: false})
       {right, _} = run(right, translations <~ left_translations)
       {:"->", meta, [left, right]}
     end)

@@ -2,10 +2,15 @@ defmodule Mix.Tasks.Tria.Warmup do
   use Mix.Task
 
   @moduledoc """
+  Tria warmup cache task
 
+  ### Options:
+
+  * `--loaded` -- to warm up cache only from modules which are loaded by default
+  * `--available` -- to warm up cache from all modules in code path
   """
 
-  @shortdoc "Checks all loaded modules or modules path"
+  @shortdoc "Warms up tria cache files"
 
   import Tria.Compiler.ElixirTranslator, only: [unalias: 1]
   alias Tria.Language.Codebase

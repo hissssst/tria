@@ -43,7 +43,6 @@ defmodule Tria.Debug.Breakpoint do
 
   # Helpers
 
-
   defp do_inspect(something, replace_with \\ "  ") do
     something
     |> inspect(limit: :infinity, pretty: true, printable_limit: :infinity, structs: false)

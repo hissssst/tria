@@ -4,6 +4,11 @@ defmodule Tria.Language.Bindmap do
   Utility structure for working with bindings map
   """
 
+  @typedoc """
+  A bindmap is a `map()` of bindings
+  where key is on the left side of `=`
+  and value is on the right
+  """
   @type t :: %{Tria.t() => Tria.t()}
 
   @type key :: Tria.t()

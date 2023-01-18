@@ -3,6 +3,7 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
   @moduledoc """
   Joining, optimizing and other stuff for Enum
 
+  #TODO fusable check
   #TODO translate enum functions to `:lists` where applicable
   """
 
@@ -18,8 +19,8 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
   alias Tria.Compiler.SSATranslator
   alias Tria.Debug.Tracer
 
-  @common_ops ~w[filter reject map reduce sum count product frequencies flat_map foldl foldr]a
-  @list_returning_op ~w[filter reject map concat]a
+  #@common_ops ~w[filter reject map reduce sum count product frequencies flat_map foldl foldr]a
+  #@list_returning_op ~w[filter reject map concat]a
 
   defguard is_fusable(module, function, arity)
            when module == Enum or module == Stream
@@ -28,13 +29,11 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
 
   defguard is_eos(eos) when eos in [Enum, Stream]
 
-
   @tri_opts meta: false
 
   defmacrop hit do
     line = __CALLER__.line
     quote do
-      # IO.inspect(unquote(line), label: :fusion_hit_at)
       Tracer.tag(unquote(line), label: :fusion_hit_at)
       Process.put(:hit, true)
     end
@@ -243,6 +242,7 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
   ### with Map.new
   def join_consecutive([{eos, :map, [left]} = first, {Map, :new, [right]} = second | tail]) when is_eos(eos) do
     if eos == Stream or is_pure_fn(left) do
+      hit()
       func = evaluate tri fn x -> right.(left.(x)) end
       [{Map, :new, [func]} | join_consecutive(tail)]
     else
@@ -251,6 +251,7 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
   end
 
   def join_consecutive([{eos, :map, [left]}, {Map, :new, []} | tail]) when is_eos(eos) do
+    hit()
     func = evaluate tri fn x -> left.(x) end
     [{Map, :new, [func]} | join_consecutive(tail)]
   end

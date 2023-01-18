@@ -667,7 +667,7 @@ defmodule Tria.Compiler.ElixirTranslator do
       other, env ->
         #FIXME not sure about this, needs testing
         # I mean, I am not sure that env inheritance works this way
-        # inside `with`. But who the fuck knows, right?
+        # inside `with`. But who the **** knows, right?
         expand_all(other, env)
     end)
   end

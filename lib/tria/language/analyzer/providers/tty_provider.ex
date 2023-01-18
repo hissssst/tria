@@ -1,4 +1,4 @@
-defmodule Tria.Language.Analyzer.Purity.TTYProvider do
+defmodule Tria.Language.Analyzer.TTYProvider do
 
   @moduledoc """
   Purity Provider which reads the purity information from stdin.
@@ -7,7 +7,7 @@ defmodule Tria.Language.Analyzer.Purity.TTYProvider do
   """
 
   import Tria.Language
-  alias Tria.Language.Analyzer.Purity.Provider
+  alias Tria.Language.Analyzer.Provider
   alias Tria.Language.Codebase
 
   @behaviour Provider
@@ -17,8 +17,8 @@ defmodule Tria.Language.Analyzer.Purity.TTYProvider do
   use GenServer
 
   @impl Provider
-  def is_pure(mfa, opts \\ []) do
-    GenServer.call(start(), {:is_pure, mfa, opts}, :infinity)
+  def decide(trait, mfa, opts \\ []) do
+    GenServer.call(start(), {:decide, trait, mfa, opts}, :infinity)
   end
 
   defp start(opts \\ []) do
@@ -35,14 +35,14 @@ defmodule Tria.Language.Analyzer.Purity.TTYProvider do
   end
 
   @impl GenServer
-  def handle_call({:is_pure, mfa, opts}, _, state) do
-    result = ask(mfa, Enum.into(opts, %{stack: [], show: nil}))
+  def handle_call({:decide, trait, mfa, opts}, _, state) do
+    result = ask(trait, mfa, Enum.into(opts, %{stack: [], show: nil}))
     {:reply, result, state}
   end
 
-  defp ask(mfa, %{stack: stack} = opts) do
-    mfa
-    |> prompt(opts)
+  defp ask(trait, mfa, %{stack: stack} = opts) do
+    trait
+    |> prompt(mfa, opts)
     |> IO.gets()
     |> String.codepoints()
     |> List.first()
@@ -55,23 +55,23 @@ defmodule Tria.Language.Analyzer.Purity.TTYProvider do
 
       "s" when not is_empty(stack) ->
         Enum.each(stack, fn {m, f, a} -> IO.puts "#{m}.#{f}/#{a}" end)
-        ask(mfa, opts)
+        ask(trait, mfa, opts)
 
       "S" ->
         inspect_ast Codebase.fetch_tria(mfa), label: :show
-        ask(mfa, opts)
+        ask(trait, mfa, opts)
 
       _ ->
-        ask(mfa, opts)
+        ask(trait, mfa, opts)
     end
   end
 
-  defp prompt({m, f, a}, %{stack: stack}) when not is_empty(stack) do
-    "\n#{ast_to_string {{:".", [], [m, f]}, [], a}}\n\nIs pure [y(yes); n(no); S(show); s(stack)] "
+  defp prompt(trait, {m, f, a}, %{stack: stack}) when not is_empty(stack) do
+    "\n#{ast_to_string {{:".", [], [m, f]}, [], a}}\n\nIs #{trait} [y(yes); n(no); S(show); s(stack)] "
   end
 
-  defp prompt({m, f, a}, _) do
-    "\n#{ast_to_string {{:".", [], [m, f]}, [], a}}\n\nIs pure [y(yes); n(no); S(show)] "
+  defp prompt(trait, {m, f, a}, _) do
+    "\n#{ast_to_string {{:".", [], [m, f]}, [], a}}\n\nIs #{trait} [y(yes); n(no); S(show)] "
   end
 
 end

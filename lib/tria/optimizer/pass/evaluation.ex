@@ -130,7 +130,10 @@ defmodule Tria.Optimizer.Pass.Evaluation do
               { q, hit state }
           end
 
-        { block, right_state <~ left_state <~ state }
+        state = left_state <~ state
+        state = right_state <~ state # HERE
+
+        { block, state }
 
       # Block
       {:__block__, _, []} = empty_block ->
@@ -237,7 +240,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
                 pattern =
                   case pattern do
                     [{:when, whenmeta, [args, guard]}] ->
-                      [{:when, whenmeta, [tuplify(args), guard]}]
+                      [{:when, whenmeta, [tuplify(List.wrap args), guard]}]
 
                     pattern ->
                       [tuplify(pattern)]
@@ -391,24 +394,25 @@ defmodule Tria.Optimizer.Pass.Evaluation do
 
     clauses
     |> Enum.map(fn {:"->", meta, [left, right]} ->
-      {left, left_state} = run_match(left, state)
-      {Interpreter.multimatch(left, unfolded_args), {left, left_state, meta, right}}
+      {left, state} = run_match(left, state)
+      {Interpreter.multimatch(left, unfolded_args), {left, state, meta, right}}
     end)
     |> filter_clauses()
     |> case do
-      [{{:yes, bindings}, {_pattern, left_state, _meta, body}} | _] ->
-        state = put_binds(state <~ left_state, bindings)
+      [{{:yes, bindings}, {_pattern, state, _meta, body}} | _] ->
+        state = put_binds(state, bindings)
+        {body, state} = run(body, state)
+
         body =
           bindings
           |> Enum.flat_map(fn {key, value} ->
-            if vared_literal?(value), do: [], else: [{:=, [], [key, value]}]
+            if quoted_literal?(value), do: [], else: [{:=, [], [key, value]}]
           end)
           |> case do
             [] -> body
             lines -> {:__block__, [], lines ++ [body]}
           end
 
-        {body, state} = run(body, state)
         {:block, body, hit(state)}
 
       [] ->

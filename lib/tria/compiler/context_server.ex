@@ -1,9 +1,13 @@
 defmodule Tria.Compiler.ContextServer do
 
   @moduledoc """
-  GenServer which compiles the context module when all dependants are compiled
+  GenServer which compiles the context module when all it's modules
+  are traversed and all stubs for them are compiled.
 
   #TODO implement recompilation of existing module
+  #TODO supervising
+  #TODO store definitions in ets and allow reemition of them
+  #TODO parallel definition handing
   """
 
   use GenServer
@@ -14,7 +18,10 @@ defmodule Tria.Compiler.ContextServer do
   alias Tria.Debug.Tracer
   alias Tria.Language.FunctionRepo
   alias Tria.Language.Interpreter
+  alias Tria.Language.MFArity
   alias Tria.Optimizer
+
+  @type t :: atom()
 
   # Public
 
@@ -24,23 +31,47 @@ defmodule Tria.Compiler.ContextServer do
     |> GenServer.call(msg, :infinity)
   end
 
+  @doc """
+  Sends definition to context server.
+  This definition is stored in context server's state
+  and will be used to generate context module
+  """
+  @spec emit_definition(t(), Compiler.definition()) :: :ok
   def emit_definition(context, definition) do
     call(context, {:add_definition, definition})
   end
 
+  @doc """
+  Mark `module` ready. Context module can only be generated
+  when all modules are ready
+  """
+  @spec mark_ready(t(), module()) :: :ok
   def mark_ready(context, module) do
     call(context, {:ready, module})
   end
 
+  @doc """
+  Generates context module (which is possible only when all modules are ready)
+  """
+  @spec generate(t()) :: [{module(), binary()}]
   def generate(context) do
     call(context, :generate)
   end
 
+  @doc """
+  Evaluates the module function args in it's current state
+  """
+  @spec evaluate(t(), MFArity.mfarity(), [Tria.t()]) :: any()
   def evaluate(context, mfarity, args) do
     call(context, {:evaluate, mfarity, args})
   end
 
+  @doc """
+  Starts context server or returns it's pid if it doesn't exist
+  """
+  @spec start(t()) :: pid()
   def start(name) do
+    #TODO supervising
     case GenServer.start(__MODULE__, %{name: name}, name: name) do
       {:ok, pid} -> pid
       {:error, {:already_started, pid}} -> pid
@@ -73,9 +104,6 @@ defmodule Tria.Compiler.ContextServer do
   end
 
   def handle_call({:ready, _module}, _from, state) do
-    # We generate stub every time the module is ready,
-    # because __struct__ behaves this way
-    # generate_stub(state)
     {:reply, :ok, state}
   end
 
@@ -95,25 +123,6 @@ defmodule Tria.Compiler.ContextServer do
   defp do_evaluate(_kind, clauses, args) do
     quoted = quote do: unquote(Compiler.clauses_to_fn(clauses)).(unquote_splicing args)
     Interpreter.eval!(quoted, [], :infinity)
-  end
-
-  defp generate_stub(%{name: context, definitions: definitions} = state) do
-    funcs =
-      Enum.map(definitions, fn {{module, name, arity}, {kind, _clauses}} ->
-        fname = Compiler.fname({module, kind, name, arity})
-        args = for _ <- List.duplicate(nil, arity), do: {:arg, [counter: gen_uniq_context()], Elixir}
-
-        body = [do: dot_call(__MODULE__, :evaluate, [context, Macro.escape({module, name, arity}), args])]
-        define(:def, fname, args, [], body)
-      end)
-
-    quote do
-      defmodule unquote state.name do
-        unquote_splicing funcs
-      end
-    end
-    # |> inspect_ast(label: :stub)
-    |> Compiler.compile_quoted("#{state.name}.ex")
   end
 
   defp generate_context(state) do

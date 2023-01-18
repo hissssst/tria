@@ -19,8 +19,6 @@ defmodule Tria.Language.Codebase do
   @typedoc "Name for a chunk in beam lib"
   @type chunk :: atom() | charlist()
 
-  @typedoc "Module.function/arity or list of arguments"
-
   # BEAM chunks
 
   @doc """

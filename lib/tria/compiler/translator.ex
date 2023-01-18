@@ -1,7 +1,8 @@
 defmodule Tria.Compiler.Translator do
 
   @moduledoc """
-  Behaviour for translators
+  Behaviour for translators. Translator is basically a thing
+  which translates one AST form to another.
   """
 
   @typedoc """

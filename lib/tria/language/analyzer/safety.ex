@@ -35,9 +35,6 @@ defmodule Tria.Language.Analyzer.Safety do
       {:throw, _, _} ->
         throw false
 
-      {op, _, [_, body]} when op in ~w[-> = <-]a ->
-        body
-
       {:receive, _, [{:do, clauses} | _]} = ast ->
         if complete_clauses?(clauses), do: ast, else: throw false
 
@@ -48,12 +45,31 @@ defmodule Tria.Language.Analyzer.Safety do
         other
     end)
 
-  true
-  catch false -> false
+    true
+    catch false -> false
   end
 
   defp complete_clauses?(clauses) do
     Enum.any?(clauses, &match?({:"->", _, [[x], _]} when is_variable(x), &1))
+  end
+
+  @kernel_safe [
+    {:>,   2},
+    {:>=,  2},
+    {:<,   2},
+    {:<=,  2},
+    {:===, 2},
+    {:==,  2},
+    {:!==, 2},
+    {:!=,  2},
+    {:||,  2},
+    {:&&,  2},
+    {:max, 2},
+    {:min, 2},
+  ]
+
+  defp lookup({Kernel, function, arity}, _stack) when {function, arity} in @kernel_safe do
+    true
   end
 
   defp lookup({:erlang, function, arity}, _stack) do

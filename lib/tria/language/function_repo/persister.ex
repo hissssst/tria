@@ -1,6 +1,11 @@
 defmodule Tria.Language.FunctionRepo.Persister do
-  # This module is a singleton genserver which
-  # periodically persists tables on disk
+
+  @doc """
+  This module is a singleton genserver which periodically persists tables on disk.
+  Each table is stored using atomic file lock. This can break on some filesystems,
+
+  #TODO fix what's written above
+  """
 
   use GenServer
 

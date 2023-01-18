@@ -37,7 +37,7 @@ defmodule Tria do
 
   @doc """
   This macro applies optimizer to the passed body.
-  Use it with caution, because it can fuck up the context
+  Use it with caution, because it can mess up the context
   """
   defmacro tria(opts \\ [], do_body)
   defmacro tria(opts, do: body), do: run(body, opts ++ [env: __CALLER__])

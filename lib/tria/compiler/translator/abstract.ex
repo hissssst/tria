@@ -97,6 +97,12 @@ defmodule Tria.Compiler.AbstractTranslator do
         {:cond, meta(anno), [[do: clauses]]}
 
       # List comprehension
+      {:lc, anno, body, [{:b_generate, banno, bin, input}]} ->
+        {:<<>>, _, bin} = traverse(bin)
+        {last, heading} = List.pop_at(bin, -1)
+        input = traverse(input)
+        {:for, meta(anno), [{:<<>>, meta(banno), heading ++ [{:"<-", [], [last, input]}]}, [do: traverse_block body]]}
+
       {:lc, anno, body, loops} ->
         {:for, meta(anno), traverse(loops) ++ [[do: traverse_block body]]}
 
@@ -179,7 +185,9 @@ defmodule Tria.Compiler.AbstractTranslator do
 
       # Binary comprehension
       {:bc, anno, element, qualifiers} ->
-        {:for, meta(anno), [{:<<>>, meta(anno), traverse(qualifiers)}, [do: traverse(element)]]}
+        #FIXME this is correct translation, but Tria does not expect any `for`s inside the code
+        # therefore we need to change it to something better
+        {:for, meta(anno), [{:<<>>, meta(anno), traverse(qualifiers)}, [into: "", do: traverse(element)]]}
 
       # Charlist
       {:string, _anno, list} ->
@@ -264,7 +272,7 @@ defmodule Tria.Compiler.AbstractTranslator do
         # existing variables. Therefore, we change names of variables
         # defined in arguments of functions
         {:fn, meta(anno), traverse clauses}
-        |> SSATranslator.from_tria!()
+        # |> SSATranslator.from_tria!()
 
       {:named_fun, anno, name, clauses} ->
         #FIXME this one is absolutely incorrect
@@ -453,7 +461,6 @@ defmodule Tria.Compiler.AbstractTranslator do
     bsr:     {Bitwise, :>>>},
     bnot:    {Bitwise, :~~~},
   }
-  @kernel_ops for {_, {Kernel, op}} <- @op_map, do: op
 
   defp traverse_op(op, anno, args) do
     %{^op => {m, f}} = @op_map
@@ -514,9 +521,6 @@ defmodule Tria.Compiler.AbstractTranslator do
   defp with_meta(other, _), do: other
 
   ### General helpers
-
-  defp list_unwrap([item]), do: item
-  defp list_unwrap(items), do: items
 
   defp keyword_update_new(keyword, key, func) do
     case Keyword.has_key?(keyword, key) do

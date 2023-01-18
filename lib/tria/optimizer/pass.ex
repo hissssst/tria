@@ -1,5 +1,11 @@
 defmodule Tria.Optimizer.Pass do
 
+  @moduledoc """
+  A `Pass` is a module which optimization logic.
+  Most of the passes can be run several times and this module
+  decouples this logic
+  """
+
   @type opts :: Keyword.t()
 
   @type state :: any()

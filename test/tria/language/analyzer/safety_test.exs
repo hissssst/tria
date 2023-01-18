@@ -23,7 +23,7 @@ defmodule Tria.Language.Analyzer.SafetyTest do
 
     test "unsafe throw" do
       tri do
-        throw :fuck
+        throw :oops
       end
       |> analyze()
       |> refute()

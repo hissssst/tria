@@ -1,4 +1,5 @@
 defmodule Tria.Language.Binary do
+
   @moduledoc """
   Helper module for working with binary type-specifiers
   """

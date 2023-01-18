@@ -58,7 +58,15 @@ defmodule Tria.Compiler do
   | {:build_path, Path.type(:absolute)}
 
   @doc """
+  Entry point in a compilation process.
 
+  This function performs these operations in such order
+
+  1. File is compiled using `Kernel.ParallelCompiler.compile/2`
+
+  2. module name and `.beam` bytecode sent back to the caller
+
+  3. Caller calls `recompile_from_beam/3`
   """
   @spec compile([Path.type(:absolute)], [compile_option()] | map()) :: [{module(), binary()}]
   def compile(paths, opts) when is_list(opts), do: compile(paths, Map.new(opts))
@@ -84,6 +92,7 @@ defmodule Tria.Compiler do
   end
 
   defp compiled do
+    # I feel very smart about this
     receive do
       {:compiled, message} -> [message | compiled()]
       after 0 -> []
@@ -95,6 +104,17 @@ defmodule Tria.Compiler do
   It uses the same options as `compile/2` but with one extra option:
 
   - `:file` -- (required) filename of the module
+
+  This function performs these operations:
+
+  1. Extracts `abstract_code` from beam
+
+  2. Extracts attributes, definitions, etc.
+
+  3. Emits definitions to the context server
+
+  4. Generates stub module which has corrects attributes
+  but delegates each call to context module (just like `defdelegate` does)
   """
   @type recompile_option :: compile_option() | {:file, binary()}
 
@@ -123,7 +143,7 @@ defmodule Tria.Compiler do
         fn_clauses =
           Tracer.with_local_trace(signature, fn ->
             clauses
-            |> Tracer.tag(label: :abstract)
+            |> Tracer.tag(label: :abstract, pretty: true)
             |> AbstractTranslator.to_tria!(env: empty_env(module, file), locals: locals)
             |> remotify_local_calls(module, locals)
             |> put_file(file)
@@ -157,7 +177,7 @@ defmodule Tria.Compiler do
   end
 
   defp fetch_docs(binary) do
-    #FIXME This is unstable as duck
+    #FIXME 'Docs' is unstable. Improve fetching
     {:ok, doc} = Codebase.fetch_chunk(binary, 'Docs')
     {:docs_v1, _, :elixir, "text/markdown", _, _, docs} = :erlang.binary_to_term(doc)
     for {{k, name, arity}, _, _, %{"en" => doc}, _} when k in ~w[macro function]a <- docs, into: %{} do
@@ -180,9 +200,9 @@ defmodule Tria.Compiler do
         quoted = Code.Typespec.spec_to_quoted(name, spec)
         {specs, types, [{:callback, quoted} | callbacks]}
 
-      {:attribute, _, :type, type}, {specs, types, callbacks} ->
+      {:attribute, _, attrname, type}, {specs, types, callbacks} when attrname in ~w[type opaque typep]a ->
         quoted = Code.Typespec.type_to_quoted(type)
-        {specs, [{:type, quoted} | types], callbacks}
+        {specs, [{attrname, quoted} | types], callbacks}
 
       _, acc ->
         acc
@@ -210,6 +230,7 @@ defmodule Tria.Compiler do
 
   # We do not define private functions in delegating module, since they will not ever be called
   defp delegate(_, {{_, private, _, _}, _}, _, _) when private in ~w[defp defmacrop]a, do: nil
+
   # We parse `__info__` to find if it defines structure
   defp delegate(_, {{_module, :def, :__info__, 1}, clauses}, _, _) do
     clauses
@@ -224,13 +245,17 @@ defmodule Tria.Compiler do
         {:@, [], [{:enforce_keys, [], [required]}]}
     end
   end
-  # We leave struct as is, because it is faster to call it that way
+
+  # Leave struct as is, because it is faster to call it that way
   defp delegate(_, {{module, :def, :__struct__, 0}, [{[], _, [do: body]}]}, _, _) do
     Kernel.Utils.announce_struct(module)
     case body do
       {:%{}, _, pairs} ->
-        pairs = Keyword.delete(pairs, :__struct__)
-        case Keyword.pop(pairs, :__exception__) do
+        pairs
+        |> Keyword.delete(:__struct__)
+        |> ElixirTranslator.from_tria()
+        |> Keyword.pop(:__exception__)
+        |> case do
           {nil, pairs} -> {:defstruct, [], [pairs]}
           {_, pairs} -> {:defexception, [], [pairs]}
         end
@@ -239,16 +264,20 @@ defmodule Tria.Compiler do
         nil
     end
   end
+
+  # Just leave the __struct__/1 alone
   defp delegate(_, {{_module, :def, :__struct__, 1}, _}, _, _) do
     nil
   end
-  # We leave impl as is, because it will be faster to dispatch
+
+  # Leave impl as is, because it will be faster to dispatch
   defp delegate(_, {{_, :def, :__impl__, 1}, _} = definition, _, attrs) do
     definition
     |> define_definition()
     |> prepend_attrs(attrs)
   end
-  # We leave delegate defmacros, but we also prepend __CALLER__
+
+  # Leave delegate defmacros, but we also prepend __CALLER__
   defp delegate(tria_context, {{module, :defmacro, name, arity} = signature, _clauses}, meta, attrs) do
     args = Macro.generate_unique_arguments(arity, nil)
     callargs = [{:__CALLER__, [], nil} | args]
@@ -258,7 +287,8 @@ defmodule Tria.Compiler do
     |> prepend_attrs(attrs)
     |> Tracer.tag_ast(key: {module, name, arity}, label: :delegated)
   end
-  # We simply delegate regular functions
+
+  # Delegate regular functions
   defp delegate(tria_context, {{module, kind, name, arity} = signature, _}, meta, attrs) do
     args = Macro.generate_unique_arguments(arity, nil)
     fname = fname(signature)
@@ -309,8 +339,10 @@ defmodule Tria.Compiler do
   end
 
   @doc """
-  Like `Code.compile_quoted/2` but with error descriptions
+  Like `Code.compile_quoted/2` but notes the place where
+  compilation error occured
   """
+  @spec compile_quoted(Macro.t(), Path.t()) :: [{module(), binary()}]
   def compile_quoted(quoted, file \\ "nofile") do
     Code.compile_quoted(quoted, file)
   rescue
@@ -334,6 +366,7 @@ defmodule Tria.Compiler do
   @doc """
   Converts module, name to the name in the context module
   """
+  @spec fname(signature()) :: atom()
   def fname({module, kind, name, _arity}) do
     kind_name =
       case kind do

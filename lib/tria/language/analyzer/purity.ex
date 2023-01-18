@@ -16,7 +16,7 @@ defmodule Tria.Language.Analyzer.Purity do
   alias Tria.Language.MFArity
   alias Tria.Language.Interpreter
   alias Tria.Language.{Codebase, FunctionRepo}
-  alias Tria.Language.Analyzer.Purity.Provider
+  alias Tria.Language.Analyzer.Provider
 
   @type stack :: [{module(), atom(), non_neg_integer()}]
 
@@ -62,9 +62,7 @@ defmodule Tria.Language.Analyzer.Purity do
   @doc """
   Checks if effect calls are present in ast
   """
-  def check_analyze(ast, stack \\ [])
-  def check_analyze(dot_call(_, :__impl__, [:target]), _), do: true
-  def check_analyze(ast, stack) do
+  def check_analyze(ast, stack \\ []) do
     prewalk(ast, fn
       dot_call(m, f, a) ->
         mfa = {m, f, a}
@@ -109,9 +107,10 @@ defmodule Tria.Language.Analyzer.Purity do
 
   # This functions checks whether the mfargs is pure or not
   @spec lookup(MFArity.mfargs(), stack()) :: boolean()
+  defp lookup({_, :__impl__, [:target]}, _), do: true
   defp lookup({_, f, _}, [{module, function, arity} = mfarity | stack]) when is_variable(f) do
     with nil <- do_lookup(mfarity, stack) do
-      pure? = Provider.is_pure({module, function, List.duplicate(nil, arity)}, stack: stack, show: true)
+      pure? = ask_provider({module, function, List.duplicate(nil, arity)}, stack)
       FunctionRepo.insert(mfarity, :pure, pure?)
     end
   end
@@ -121,18 +120,18 @@ defmodule Tria.Language.Analyzer.Purity do
       case Codebase.fetch_tria_bodies mfarity do
         # No function found
         nil ->
-          pure? = Provider.is_pure(mfargs, stack: stack)
+          pure? = ask_provider(mfargs, stack)
           FunctionRepo.insert(mfarity, :pure, pure?)
 
         # Is a NIF or BIF function
         [dot_call(:erlang, :nif_error, _)] ->
-          pure? = Provider.is_pure(mfargs, stack: stack)
+          pure? = ask_provider(mfargs, stack)
           FunctionRepo.insert(mfarity, :pure, pure?)
 
         # Single clause function which calls itself is recursively defined
         # So we better ask
         [dot_call(^module, ^function, args)] when length(args) == arity ->
-          pure? = Provider.is_pure(mfargs, stack: stack)
+          pure? = ask_provider(mfargs, stack)
           FunctionRepo.insert(mfarity, :pure, pure?)
 
         # Anything else, and for this we don't insert the purity check
@@ -168,6 +167,10 @@ defmodule Tria.Language.Analyzer.Purity do
       {:effect, effect} -> [effect | fetch_effects()]
       after 0 -> []
     end
+  end
+
+  defp ask_provider(mfarity, stack) do
+    Provider.decide(:pure, mfarity, stack: stack, show: true)
   end
 
 end

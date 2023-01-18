@@ -172,4 +172,37 @@ defmodule Tria.Compiler.AbstractTranslatorTest do
       end
     end
   end
+
+  describe "Regression" do
+    test "in fn" do
+      abstract do
+        fn type, constraint ->
+          fn match ->
+            case {type, constraint,  match} do
+              {^type, ^constraint, :exact} -> true
+              {^type, cc, :suffix} -> String.ends_with?(constraint, cc)
+              {^type, cc, :prefix} -> String.starts_with?(constraint, cc)
+              _ -> false
+            end
+          end
+        end
+      end
+      |> IO.inspect(pretty: true)
+      |> to_tria!()
+      |> inspect_ast(label: :result)
+      |> unmeta()
+      |> assert_tri do
+        fn type, constraint ->
+          fn match ->
+            case {type, constraint, match} do
+              {^type, ^constraint, :exact} -> true
+              {^type, cc1, :suffix} -> String.ends_with?(constraint, cc1)
+              {^type, cc2, :prefix} -> String.starts_with?(constraint, cc2)
+              _ -> false
+            end
+          end
+        end
+      end
+    end
+  end
 end
