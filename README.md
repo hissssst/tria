@@ -5,6 +5,31 @@
 
 An optimizing compiler for elixir.
 
+## How to use
+
+1. Add a dependency
+```elixir
+def deps do
+  [
+    {:tria, github: "hissssst/tria"}
+  ]
+end
+```
+
+2. Add a compiler and remove protocol consolidation
+```elixir
+def project do
+  [
+    ...
+    consolidate_protocols: false,
+    compilers: [:erlang, :tria, :app]
+  ]
+end
+```
+
+3. `mix compile`
+There will be a ton of warnings. Just ignore them
+
 ## Features
 
 1. Constant evaluation. Plain Elixir and Erlang are unable to evaluate so-called remote call. Tria evalutes what can be evaluated in runtime
