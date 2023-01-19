@@ -64,12 +64,14 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   @spec run_once(Tria.t(), [option()]) :: {:ok, Tria.t()} | {:error, :nothing_to_optimize}
   def run_once(ssa_ast, opts \\ []) do
     Tracer.tag_ast(ssa_ast, label: :evaluation_run_once)
+
     state = opts_to_state(opts)
     {result, state} = run(ssa_ast, state)
     {result, state} =
       if Keyword.get(opts, :remove_unused, true) do
-        run_remove_unused(result, state)
-        # |> tap(fn {x, _} -> inspect_ast(x, label: :unused_removed) end)
+        result
+        |> run_remove_unused(state)
+        |> tap(fn {ast, _} -> Tracer.tag_ast(ast, label: :evaluation_unused_removed) end)
       else
         {result, state}
       end
@@ -107,10 +109,6 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   """
   def run(ast, state) do
     case ast do
-      # Breakpoint
-      # breakpoint(point) ->
-      #   handle_breakpoint(point)
-
       # Equals
       {:"=", meta, [left, right]} ->
         {left, left_state} = run_match(left, state)
@@ -122,18 +120,15 @@ defmodule Tria.Optimizer.Pass.Evaluation do
               { {:=, meta, [new_left, new_right]}, put_bind(state, new_left, new_right) }
 
             {_yes_or_maybe, binds} ->
-              block = {:__block__, [], Enum.map(binds, fn {l, r} -> {:=, meta, [l, r]} end) ++ [right]}
-              { block, hit put_bind(state, left, right) }
+              state = hit Enum.reduce(binds, state, fn {key, value}, state -> put_bind(state, key, value) end)
+              { {:=, meta, [left, right]}, state }
 
             :no ->
               q = quote do: raise MatchError, term: unquote right
               { q, hit state }
           end
 
-        state = left_state <~ state
-        state = right_state <~ state # HERE
-
-        { block, state }
+        { block, right_state <~ (left_state <~ state) }
 
       # Block
       {:__block__, _, []} = empty_block ->
@@ -399,21 +394,15 @@ defmodule Tria.Optimizer.Pass.Evaluation do
     end)
     |> filter_clauses()
     |> case do
-      [{{:yes, bindings}, {_pattern, state, _meta, body}} | _] ->
-        state = put_binds(state, bindings)
-        {body, state} = run(body, state)
-
-        body =
+      [{{:yes, bindings}, {_pattern, state, meta, body}} | _] ->
+        lines =
           bindings
-          |> Enum.flat_map(fn {key, value} ->
-            if quoted_literal?(value), do: [], else: [{:=, [], [key, value]}]
-          end)
-          |> case do
-            [] -> body
-            lines -> {:__block__, [], lines ++ [body]}
-          end
+          |> Enum.map(fn {key, value} -> {:=, meta, [key, value]} end)
+          |> Kernel.++([body])
 
-        {:block, body, hit(state)}
+        block = {:__block__, meta, lines}
+        {block, state} = run(block, state)
+        {:block, block, hit(state)}
 
       [] ->
         {:block, error_fn.(args), hit(state)}
@@ -724,7 +713,9 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   end
 
   defp unfold(value, %{bindings: bindings}) do
-    Bindmap.unfold(value, bindings)
+    Bindmap.unfold_while(value, bindings, fn ast ->
+      if vared_literal?(ast), do: :cont, else: :halt
+    end)
   end
 
   defp left <~ right do

@@ -1,7 +1,7 @@
 defmodule Tria.Optimizer.Pass.EvaluationTest do
   use ExUnit.Case
 
-  import Tria.Language, only: [inspect_ast: 2], warn: false
+  import Tria.Language, only: [inspect_ast: 2, filterwalk: 2, dot_call: 3], warn: false
   import Tria.Language.Tri
   import Tria.TestHelpers
 
@@ -1230,6 +1230,31 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
   end
 
   describe "Regression" do
+    test "Case argument unfolding" do
+      tri do
+        x = IO.inspect(y)
+        case x do
+          z -> z + z
+        end
+      end
+      |> run_while()
+      |> assert_tri do
+        x = IO.inspect(y)
+        Kernel.+(x, x)
+      end
+    end
+
+    test "Matching with code" do
+      inspects =
+        tri do
+          {left, right} = {IO.inspect(1), IO.inspect(2)}
+        end
+        |> run_while()
+        |> Tria.Language.filterwalk(&match?(dot_call(IO, :inspect, _), &1))
+
+      assert length(inspects) == 2
+    end
+
     test "Plug" do
       tri do
         try do
