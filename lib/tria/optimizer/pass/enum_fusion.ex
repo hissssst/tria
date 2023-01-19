@@ -301,14 +301,12 @@ defmodule Tria.Optimizer.Pass.EnumFusion do
   defp evaluate(ast) do
     ast
     |> SSATranslator.from_tria!()
-    |> Evaluation.run_while()
+    |> Evaluation.run_while(remove_unused: true)
   end
 
   defp is_pure_fn({:fn, _, [clauses]}) do
     is_pure(clauses)
   end
   defp is_pure_fn(_), do: false
-
-  ### Hitting and stuff
 
 end

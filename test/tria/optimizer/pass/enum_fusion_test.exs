@@ -14,6 +14,29 @@ defmodule Tria.Optimizer.Pass.EnumFusionTest do
 
   @tri_opts to_tria: :force, meta: false
 
+  describe "Regression" do
+    test "map map sum" do
+      tri do
+        1..3
+        |> Enum.map(&IO.inspect(&1, label: "hello"))
+        |> Enum.map(&IO.inspect(&1, label: "world"))
+        |> Enum.sum()
+      end
+      |> run_while()
+      |> assert_tri do
+        Enum.reduce(_, 0, fn item, acc ->
+          item2 =
+            (
+              item1 = IO.inspect(item, label: "hello")
+              IO.inspect(item1, label: "world")
+            )
+
+          Kernel.+(item2, acc)
+        end)
+      end
+    end
+  end
+
   describe "`for` optimization" do
     test "to map" do
       abstract do
