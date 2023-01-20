@@ -30,6 +30,8 @@ defmodule Tria.Language.Binary do
 
   @type traverse_func :: (Tria.t(), state() -> {Tria.t(), state()})
 
+  @type replace_func :: (Tria.t() -> Tria.t())
+
   @doc "Checks if the variable ast is a reserved type specifier"
   defguard is_reserved(t) when is_tuple(t) and tuple_size(t) == 3
      and element(t, 0) in @reserved
@@ -99,6 +101,15 @@ defmodule Tria.Language.Binary do
       end)
 
     { {:<<>>, meta, parts}, state }
+  end
+
+  @doc """
+  Traverses type specifications of binary
+  """
+  @spec traverse_binary_specifiers(Tria.t(), replace_func()) :: Tria.t()
+  def traverse_binary_specifiers(binary, func) do
+    {binary, _} = traverse_binary_specifiers(binary, [], fn item, _ -> {func.(item), []} end)
+    binary
   end
 
   @doc """

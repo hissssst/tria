@@ -40,6 +40,7 @@ defmodule Tria.Compiler do
   alias Tria.Compiler.ElixirTranslator
   alias Tria.Debug.Tracer
   alias Tria.Language.Codebase
+  alias Tria.Language.Binary
 
   @special_functions [__info__: 1, __struct__: 2, __struct__: 1, __impl__: 1]
 
@@ -211,9 +212,19 @@ defmodule Tria.Compiler do
 
   defp remotify_local_calls(ast, module, locals) do
     postwalk(ast, fn
-      {name, _meta, args} = ast_node when is_atom(name) and is_list(args) ->
+      # This clauses fixes what the next clause does in binary patterns
+      {:<<>>, _meta, _parts} = binary ->
+        Binary.traverse_binary_specifiers(binary, fn
+          dot_call(^module, name, args, meta, _meta) ->
+            {name, meta, args}
+
+          item ->
+            item
+        end)
+
+      {name, meta, args} = ast_node when is_atom(name) and is_list(args) ->
         if {name, length(args)} in locals do
-          dot_call(module, name, args)
+          dot_call(module, name, args, meta, meta)
         else
           ast_node
         end
