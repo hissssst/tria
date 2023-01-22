@@ -128,7 +128,7 @@ defmodule Tria.Compiler.ContextServer do
   defp generate_context(state) do
     funcs = definitions_to_funcs(state.definitions)
 
-    #FIXME add functions to module, instead of recompiling it every time
+    #TODO add functions to module, instead of recompiling it every time
     unless :code.get_object_code(state.name) == :error do
       IO.warn "The context module already exists"
     end

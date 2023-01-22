@@ -160,19 +160,19 @@ defmodule Tria.Optimizer.Pass.Evaluation do
               is_pure(line) and is_safe(line) ->
                 # Binds must be in the correct order
                 {_, binds} =
-                  prewalk(line, [], fn
-                    tri(_key = value) = match, acc when is_fn(value) ->
+                  context_prewalk(line, [], fn
+                    tri(_key = value) = match, acc, nil when is_fn(value) ->
                       {nil, [match | acc]}
 
-                    tri(_key = _value) = match, acc ->
+                    tri(_key = _value) = match, acc, nil ->
                       {match, [match | acc]}
 
-                    the_fn, acc when is_fn(the_fn) ->
+                    the_fn, acc, _ when is_fn(the_fn) ->
                       {nil, acc}
 
-                    other, acc ->
+                    other, acc, _ ->
                       {other, acc}
-                  end)
+                  end, nil)
 
                 {:lists.reverse(binds), hit state}
 

@@ -7,6 +7,7 @@ defmodule Tria.Language.Analyzer.Safety do
 
   import Tria.Language
   alias Tria.Language.MFArity
+  alias Tria.Language.Interpreter
   alias Tria.Language.Codebase
   alias Tria.Language.FunctionRepo
 
@@ -40,6 +41,12 @@ defmodule Tria.Language.Analyzer.Safety do
 
       {:case, _, [_arg, [do: clauses]]} = ast ->
         if complete_clauses?(clauses), do: ast, else: throw false
+
+      {:=, _, [left, right]} = ast ->
+        case Interpreter.match(left, right) do
+          {:yes, _} -> ast
+          _ -> throw false
+        end
 
       other ->
         other
