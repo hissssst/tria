@@ -66,7 +66,7 @@ defmodule Tria.Language.Analyzer.Purity do
     prewalk(ast, fn
       dot_call(m, f, a) ->
         mfa = {m, f, a}
-        if lookup(mfa, stack), do: mfa, else: throw false
+        if lookup(mfa, stack), do: mfa, else: throw(false)
 
       # Even if function creates fn with impure body, this function is still pure
       {:fn, _, _} ->
@@ -77,8 +77,8 @@ defmodule Tria.Language.Analyzer.Purity do
         throw false
 
       # Optimization to not waste time on analysis of patterns
-      {op, _, [_, body]} when op in ~w[-> = <-]a ->
-        body
+      {op, _, [_, right]} when op in ~w[-> = <-]a ->
+        if check_analyze(right, stack), do: nil, else: throw(false)
 
       # Called to variables are considered impure
       dot_call(_, _) ->
