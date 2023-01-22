@@ -579,28 +579,22 @@ defmodule Tria.Language do
         { {atom, m, [pattern, body]}, acc }
 
       {left, right} ->
-        {left, acc} = func.(left, acc, nil)
         {left, acc} = context_prewalk(left, acc, func, nil)
-        {right, acc} = func.(right, acc, nil)
         {right, acc} = context_prewalk(right, acc, func, nil)
         { {left, right}, acc }
 
       [head | tail] ->
-        {head, acc} = func.(head, acc, nil)
         {head, acc} = context_prewalk(head, acc, func, nil)
-        {tail, acc} = func.(tail, acc, nil)
         {tail, acc} = context_prewalk(tail, acc, func, nil)
         { [head | tail], acc }
 
       {node, m, children} ->
-        {node, acc} = func.(node, acc, nil)
         {node, acc} = context_prewalk(node, acc, func, nil)
-        {children, acc} = func.(children, acc, nil)
         {children, acc} = context_prewalk(children, acc, func, nil)
         { {node, m, children}, acc }
 
       other ->
-        func.(other, acc, nil)
+        { other, acc }
     end
   end
   def context_prewalk(ast, acc, func, :match) do
