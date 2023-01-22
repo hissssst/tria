@@ -6,7 +6,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
   import Tria.TestHelpers
 
   alias Tria.Optimizer.Pass.Evaluation, as: Evaluation
-  alias Tria.Compiler.SSATranslator
 
   @tri_opts meta: false, to_ssa: true
 
@@ -1230,6 +1229,32 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
   end
 
   describe "Regression" do
+    test "" do
+      tri do
+        case x1 do
+          {:x, _} = tuple -> tuple
+          y -> y
+        end
+
+        case x2 do
+          {:x, _} = tuple -> tuple
+          y -> y
+        end
+      end
+      |> run_while()
+      |> assert_tri do
+        case x1 do
+          {:x, _} = tuple1 -> x1
+          y1 -> x1
+        end
+
+        case x2 do
+          {:x, _} = tuple2 -> x2
+          y2 -> x2
+        end
+      end
+    end
+
     test "Case argument unfolding" do
       tri do
         x = IO.inspect(y)
