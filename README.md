@@ -45,6 +45,15 @@ translates it to Tria. Tria is then optimized and then
 translated back to Elixir which is then compiled to beam
 for the last time
 
+## How to debug
+
+```sh
+export TRIA_DEBUG=1
+export TRIA_TRACE="Module.function/1,Foo.bar/2"
+```
+
+This will print all steps of compilation of the `Module.function/arity` function . Each step will be named and will be possible to grep in the exact same format
+
 ## Tria language
 
 Tria is a language, it differs from Elixir, but it is mostly Elixir

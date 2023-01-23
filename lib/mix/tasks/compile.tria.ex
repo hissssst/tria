@@ -3,6 +3,7 @@ defmodule Mix.Tasks.Compile.Tria do
   use Mix.Task.Compiler
 
   alias Tria.Compiler
+  alias Tria.Debug
   alias Tria.Debug.Tracer
 
   def run(_args) do
@@ -10,10 +11,16 @@ defmodule Mix.Tasks.Compile.Tria do
     mix_config = Mix.Project.config()
     Mix.Project.ensure_structure(mix_config)
 
-    [
-      # Write MFAs you want to trace here
-    ]
-    |> Enum.map(&Tracer.trace(&1, only: :all))
+    if truthy_string? System.get_env("TRIA_DEBUG", "false") do
+      Debug.flag_debug()
+    end
+
+    if Debug.debugging?() do
+      "TRIA_TRACE"
+      |> System.get_env("")
+      |> Tracer.parse_trace_env()
+      |> Enum.map(&Tracer.trace(&1, only: :all))
+    end
 
     root = Path.dirname Mix.Project.project_file()
 
@@ -36,12 +43,10 @@ defmodule Mix.Tasks.Compile.Tria do
 
   # Basically the whole compilation pipeline
   defp compile(elixirc_paths, build_path) do
-    compiled =
-      elixirc_paths
-      |> find_all_files()
-      |> Compiler.compile(build_path: build_path, context: TriaGlobalContext)
-
-    write_to_disk(compiled, build_path)
+    elixirc_paths
+    |> find_all_files()
+    |> Compiler.compile(build_path: build_path, context: TriaGlobalContext)
+    |> write_to_disk(build_path)
   end
 
   defp write_to_disk(modules, build_path) do
@@ -69,6 +74,12 @@ defmodule Mix.Tasks.Compile.Tria do
           raise "Unrecognized filetype #{inspect other} for #{path}"
       end
     end)
+  end
+
+  defp truthy_string?(string) do
+    import String
+    string = trim downcase string
+    string in ~w[true 1 yes y]
   end
 
 end

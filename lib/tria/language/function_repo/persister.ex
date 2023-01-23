@@ -69,6 +69,10 @@ defmodule Tria.Language.FunctionRepo.Persister do
       end)
     end)
     %{state | timer: Process.send_after(self(), :tick, timeout)}
+  rescue
+    exception ->
+      IO.puts "Try removing lock file in `priv` dir of Tria"
+      reraise exception, __STACKTRACE__
   end
 
   defp with_filelock(lockfile, func) do

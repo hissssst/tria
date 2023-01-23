@@ -77,8 +77,8 @@ defmodule Tria.Language.Analyzer.Purity do
         throw false
 
       # Optimization to not waste time on analysis of patterns
-      {op, _, [_, right]} when op in ~w[-> = <-]a ->
-        if check_analyze(right, stack), do: nil, else: throw(false)
+      {op, _, [_, right]} = ast when op in ~w[-> = <-]a ->
+        if check_analyze(right, stack), do: ast, else: throw(false)
 
       # Called to variables are considered impure
       dot_call(_, _) ->

@@ -15,6 +15,7 @@ defmodule Tria.Compiler.ContextServer do
 
   alias Tria.Compiler
   alias Tria.Compiler.ElixirTranslator
+  alias Tria.Debug
   alias Tria.Debug.Tracer
   alias Tria.Language.FunctionRepo
   alias Tria.Language.Interpreter
@@ -83,6 +84,7 @@ defmodule Tria.Compiler.ContextServer do
   def init(opts) do
     state = %{
       definitions: %{},
+      check_context_module: Debug.debugging?(),
       name: Map.fetch!(opts, :name)
     }
 
@@ -129,7 +131,7 @@ defmodule Tria.Compiler.ContextServer do
     funcs = definitions_to_funcs(state.definitions)
 
     #TODO add functions to module, instead of recompiling it every time
-    unless :code.get_object_code(state.name) == :error do
+    if state.check_context_module && :code.get_object_code(state.name) != :error do
       IO.warn "The context module already exists"
     end
 

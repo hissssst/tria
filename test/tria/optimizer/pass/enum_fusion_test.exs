@@ -22,7 +22,6 @@ defmodule Tria.Optimizer.Pass.EnumFusionTest do
         |> Enum.map(&IO.inspect(&1, label: "world"))
       end
       |> run_while()
-      |> inspect_ast(label: :result)
       |> assert_tri do
         list
         |> Enum.map(&IO.inspect(&1, label: "hello"))

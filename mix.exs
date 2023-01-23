@@ -25,9 +25,9 @@ defmodule Tria.MixProject do
   defp deps do
     [
       {:ex_doc,   "~> 0.23.0", only: :docs, runtime: false},
-      {:dialyxir, "~> 1.0.0",  only: [:dev, :test], runtime: false},
-      {:credo,    "~> 1.1",    only: [:dev, :test], runtime: false},
-      {:rexbug,   "~> 1.0",    only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.0.0",  only: :dev, runtime: false},
+      {:credo,    "~> 1.1",    only: :dev, runtime: false},
+      {:rexbug,   "~> 1.0",    only: :dev, runtime: false},
     ]
   end
 end

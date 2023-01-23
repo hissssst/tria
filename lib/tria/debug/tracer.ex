@@ -65,6 +65,26 @@ defmodule Tria.Debug.Tracer do
     end
   end
 
+  @doc """
+  Parses string passed to tria tracing env
+
+  ## Example:
+
+      iex> parse_trace_env "Foo.bar/2,Boo.far/0"
+      [{Foo, :bar, 2}, {Boo, :far, 0}]
+  """
+  @spec parse_trace_env(String.t()) :: [MFArity.mfarity()]
+  def parse_trace_env(string) do
+    "[#{string}]"
+    |> Code.string_to_quoted!()
+    |> Enum.map(fn {:/, _, [{{:".", _, [{:__aliases__, _, aliases}, function]}, _, _}, arity]} when is_integer(arity) and is_atom(function) ->
+      {Module.concat(aliases), function, arity}
+    end)
+  rescue
+    exception ->
+      IO.warn "Tracing string syntax is incorrect"
+      reraise exception, __STACKTRACE__
+  end
 
   defp do_trace({module, _kind, function, arity}, data, inspector, label) do
     do_trace({module, function, arity}, data, inspector, label)

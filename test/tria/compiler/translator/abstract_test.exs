@@ -187,9 +187,7 @@ defmodule Tria.Compiler.AbstractTranslatorTest do
           end
         end
       end
-      |> IO.inspect(pretty: true)
       |> to_tria!()
-      |> inspect_ast(label: :result)
       |> unmeta()
       |> assert_tri do
         fn type, constraint ->

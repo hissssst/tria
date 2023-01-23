@@ -2,6 +2,14 @@
 
 > This is an unordered dump with features to be implemented
 
+[ ] Tria annotations. Like
+```elixir
+@tria pure: true, safe: true
+def pure_inspect(x) do
+  IO.inspect(x)
+end
+```
+
 [ ] Multiple contexts
 
 [ ] Parallel compilation
@@ -11,14 +19,6 @@
 [ ] `no_optimize` macro which ensures that optimizations are not called
 
 [ ] `warmup` options like `--only`
-
-[ ] Tria annotations. Like
-```elixir
-@tria pure: true, safe: true
-def pure_inspect(x) do
-  IO.inspect(x)
-end
-```
 
 [ ] Cache invalidation (haha, must be a __simple task__)
 

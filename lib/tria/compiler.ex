@@ -74,29 +74,50 @@ defmodule Tria.Compiler do
   def compile(paths, %{build_path: build_path, context: context} = opts) do
     caller = self()
 
-    Kernel.ParallelCompiler.compile(paths, [
-      dest: build_path,
-      each_module: fn file, module, bytecode ->
-        send(caller, {:compiled, {module, bytecode, file}})
-      end
-    ])
+    with_compiler_options([ignore_module_conflict: true], fn ->
+      Kernel.ParallelCompiler.compile(paths, [
+        dest: build_path,
+        each_module: fn file, module, bytecode ->
+          send(caller, {:compiled, {module, bytecode, file}})
+        end
+      ])
 
-    modules =
-      Enum.map(compiled(), fn {module, bytecode, file} ->
-        opts = Map.put(opts, :file, file)
-        Code.ensure_compiled!(module)
-        recompile_from_beam(module, bytecode, opts)
-      end)
+      modules =
+        Enum.map(compiled(), fn {module, bytecode, file} ->
+          opts = Map.put(opts, :file, file)
+          Code.ensure_compiled!(module)
+          recompile_from_beam(module, bytecode, opts)
+        end)
 
-    context_modules = ContextServer.generate(context)
-    context_modules ++ modules
+      context_modules = ContextServer.generate(context)
+      context_modules ++ modules
+    end)
   end
 
+  @spec compiled() :: list()
   defp compiled do
     # I feel very smart about this
     receive do
       {:compiled, message} -> [message | compiled()]
       after 0 -> []
+    end
+  end
+
+  @spec with_compiler_options(Keyword.t(), (() -> any())) :: any()
+  defp with_compiler_options(options, func) do
+    was =
+      Enum.map(options, fn {key, value} ->
+        was = Code.get_compiler_option(key)
+        Code.put_compiler_option(key, value)
+        {key, was}
+      end)
+
+    try do
+      func.()
+    after
+      Enum.each(was, fn {key, value} ->
+        Code.put_compiler_option(key, value)
+      end)
     end
   end
 

@@ -96,7 +96,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   # Since this is a private macro, it is defined above usage
   defmacrop hit(state) do
     quote do
-      Tracer.tag(unquote(__CALLER__.line), label: :hit_at)
+      Tracer.tag(unquote(__CALLER__.line), label: :evaluation_hit_at)
       # IO.inspect(unquote(__CALLER__.line), label: :hit_at)
       %{unquote(state) | hit: true}
     end
