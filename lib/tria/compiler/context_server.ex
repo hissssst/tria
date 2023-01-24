@@ -142,7 +142,9 @@ defmodule Tria.Compiler.ContextServer do
         end
       end
 
-    # File.write!("tria_global_context.ex", ast_to_string(module))
+    if Debug.debugging?() do
+      File.write!("tria_global_context.ex", ast_to_string(module))
+    end
 
     Compiler.compile_quoted(module, "#{state.name}.ex")
   end

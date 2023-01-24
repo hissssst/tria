@@ -401,7 +401,7 @@ defmodule Tria.Compiler.AbstractTranslator do
 
   defp traverse_guards(guards) do
     join(guards, :when, fn guard_tests ->
-      join(guard_tests, :and, &traverse_guard/1)
+      join(guard_tests, {:".", [], [:erlang, :andalso]}, &traverse_guard/1)
     end)
   end
 

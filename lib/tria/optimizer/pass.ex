@@ -12,14 +12,24 @@ defmodule Tria.Optimizer.Pass do
 
   @type reason :: atom()
 
+  @type t :: module()
+
   @callback begin(Tria.t(), opts()) :: {:ok, state()} | {:error, reason}
 
   @callback run_once(state(), opts()) :: {:ok, state()} | {:error, reason()}
 
   @callback finish(state(), opts()) :: {:ok, Tria.t()} | {:error, reason()}
 
+  @optional_callbacks [begin: 2, finish: 2]
+
+  @spec default_timeout() :: pos_integer()
+  def default_timeout do
+    :persistent_term.get(:tria_optimizer_pass_timeout, 5000)
+  end
+
+  @spec run_until(t(), Tria.t(), opts()) :: {:ok, Tria.t()} | {:error, reason()}
   def run_until(pass, ast, opts \\ []) do
-    timer = Process.send_after(self(), :stop, Keyword.get(opts, :timeout, 5000))
+    timer = Process.send_after(self(), :stop, Keyword.get(opts, :timeout, default_timeout()))
 
     try do
       with {:ok, state} <- pass.begin(ast, opts) do

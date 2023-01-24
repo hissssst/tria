@@ -83,6 +83,14 @@ defmodule Tria.Language.FunctionRepo do
     |> :ets.match_object(opts_to_spec opts)
   end
 
+  @spec exists?(trait(), select_options()) :: boolean()
+  def exists?(trait, opts) do
+    trait
+    |> ensure_exists()
+    |> :ets.match_object(opts_to_spec(opts), 1)
+    |> Kernel.!=(:"$end_of_table")
+  end
+
   @doc "Filters all trait tables with the specified select options"
   @spec select_all_by([trait()] | nil, select_options()) :: [{mfa(), %{trait() => entry()}}]
   def select_all_by(traits_to_select \\ nil, opts) do
@@ -114,10 +122,27 @@ defmodule Tria.Language.FunctionRepo do
     GenServer.call(start(), :traits) ++ @persistent_traits
   end
 
-  def remove_by(trait, opts) do
+  @spec remove_by(trait(), select_options()) :: :ok
+  def remove_by(trait, select_opts) do
     trait
-    |> select_by(opts)
+    |> select_by(select_opts)
     |> Enum.each(fn {key, _} -> :ets.delete(trait, key) end)
+  end
+
+  @spec exists_any?([trait()], select_options()) :: boolean()
+  def exists_any?(traits, select_opts) do
+    do_exists_any?(traits, opts_to_spec select_opts)
+  end
+
+  defp do_exists_any?([], _), do: false
+  defp do_exists_any?([trait | traits], spec) do
+    trait
+    |> ensure_exists()
+    |> :ets.match_object(spec, 1)
+    |> case do
+      :"$end_of_table" -> do_exists_any?(traits, spec)
+      _ -> true
+    end
   end
 
   # GenServer callbacks

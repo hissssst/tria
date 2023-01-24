@@ -3,8 +3,7 @@ defmodule Tria.Optimizer do
   import Tria.Language, only: [inspect_ast: 2], warn: false
   alias Tria.Compiler.SSATranslator
   alias Tria.Debug.Tracer
-  alias Tria.Optimizer.Pass.Evaluation
-  alias Tria.Optimizer.Pass.EnumFusion
+  alias Tria.Optimizer.Pass.{Evaluation, EnumFusion, Peephole}
 
   @doc """
   This same as `tria/1` macro, but as a function.
@@ -25,6 +24,7 @@ defmodule Tria.Optimizer do
     ast
     |> Evaluation.run_while(opts)
     |> EnumFusion.run_while(opts)
+    |> Peephole.run_while()
     # |> Evaluation.run_while()
   end
 
