@@ -35,12 +35,14 @@ defmodule Tria.Compiler do
   @type the_fn :: {:fn, list(), [Tria.t() | Macro.t()]}
 
   import Tria.Language
-  alias Tria.Compiler.ContextServer
   alias Tria.Compiler.AbstractTranslator
+  alias Tria.Compiler.Annotations
+  alias Tria.Compiler.ContextServer
   alias Tria.Compiler.ElixirTranslator
+  alias Tria.Debug
   alias Tria.Debug.Tracer
-  alias Tria.Language.Codebase
   alias Tria.Language.Binary
+  alias Tria.Language.Codebase
 
   @special_functions [__info__: 1, __struct__: 2, __struct__: 1, __impl__: 1]
 
@@ -74,14 +76,14 @@ defmodule Tria.Compiler do
   def compile(paths, %{build_path: build_path, context: context} = opts) do
     caller = self()
 
-    with_compiler_options([ignore_module_conflict: true], fn ->
-      Kernel.ParallelCompiler.compile(paths, [
-        dest: build_path,
-        each_module: fn file, module, bytecode ->
-          send(caller, {:compiled, {module, bytecode, file}})
-        end
-      ])
+    Kernel.ParallelCompiler.compile(paths, [
+      dest: build_path,
+      each_module: fn file, module, bytecode ->
+        send(caller, {:compiled, {module, bytecode, file}})
+      end
+    ])
 
+    with_compiler_options([ignore_module_conflict: true, no_warn_undefined: :all], fn ->
       modules =
         Enum.map(compiled(), fn {module, bytecode, file} ->
           opts = Map.put(opts, :file, file)
@@ -146,14 +148,52 @@ defmodule Tria.Compiler do
   end
   def recompile_from_beam(module, binary, %{context: context, file: file}) do
     {:ok, ac} = Codebase.fetch_abstract_code(binary)
-    {:ok, public} = Codebase.fetch_attribute(ac, :export)
+
+    %{
+      export: public,
+      tria_acc: annotations,
+      callback: callbacks,
+      type: type,
+      typep: typep,
+      opaque: opaque,
+      spec: specs
+    } = Codebase.fetch_attributes(ac, ~w[callback export tria_acc type typep opaque spec]a)
+
+    public = Enum.concat(public)
+
+    types =
+      [
+        Enum.map(type, fn x -> {:type, x} end),
+        Enum.map(typep, fn x -> {:typep, x} end),
+        Enum.map(opaque, fn x -> {:opaque, x} end)
+      ]
+      |> Enum.concat()
+      |> Enum.map(fn {kind, type} ->
+        {kind, Code.Typespec.type_to_quoted(type)}
+      end)
+
+    specs =
+      specs
+      |> Map.new(fn {{name, _arity} = key, values} ->
+        values = Enum.map(values, &Code.Typespec.spec_to_quoted(name, &1))
+        {key, values}
+      end)
+      |> Map.delete({:__info__, 1})
+
+    callbacks =
+      Enum.map(callbacks, fn {{name, _arity}, [value]} ->
+        {:callback, Code.Typespec.spec_to_quoted(name, value)}
+      end)
 
     locals =
       for {:function, _anno, name, arity, _clauses} <- ac do
         {name, arity}
       end
 
-    {specs, types, callbacks} = attributes_from_abstract(ac)
+    annotations
+    |> Enum.map(fn [{kind, name, arity, opts}] -> {{module, kind, name, arity}, opts} end)
+    |> Annotations.put_annotations()
+
     docs = fetch_docs(binary)
 
     delegations =
@@ -169,8 +209,11 @@ defmodule Tria.Compiler do
             |> AbstractTranslator.to_tria!(env: empty_env(module, file), locals: locals)
             |> remotify_local_calls(module, locals)
             |> put_file(file)
-            |> Tracer.tag(label: :after_translation)
+            |> Tracer.tag(label: :after_translation, pretty: true)
           end)
+
+        if name == :__adapter__, do: IO.puts "IT EXISTS\n\n\n"
+        Tria.Language.FunctionRepo.insert({module, name, arity}, :defined, true)
 
         clauses = fn_to_clauses(fn_clauses)
         definition = {signature, clauses}
@@ -180,10 +223,10 @@ defmodule Tria.Compiler do
         end
 
         doc = Map.get(docs, {name, arity})
-        spec = Map.get(specs, {name, arity})
+        specs = for spec <- Map.get(specs, {name, arity}, []), do: {:spec, spec}
         meta = AbstractTranslator.meta(anno)
 
-        delegate(context, definition, meta, doc: doc, spec: spec)
+        delegate(context, definition, meta, [{:doc, doc} | specs])
       end
 
     ContextServer.mark_ready(context, module)
@@ -192,7 +235,6 @@ defmodule Tria.Compiler do
 
     [{^module, binary}] =
       {:defmodule, [], [module, [do: body]]}
-      # |> inspect_ast(label: :delegating)
       |> Code.compile_quoted(file)
 
     {module, binary}
@@ -205,30 +247,6 @@ defmodule Tria.Compiler do
     for {{k, name, arity}, _, _, %{"en" => doc}, _} when k in ~w[macro function]a <- docs, into: %{} do
       {{name, arity}, doc}
     end
-  end
-
-  # TODO separate specs for private functions from other attributes
-  # and remove private functions from delegations to avoid a ton of warnings
-  defp attributes_from_abstract(abstract_code) do
-    Enum.reduce(abstract_code, {%{}, [], []}, fn
-      {:attribute, _, s, {{:__info__, 1}, _}}, acc when s in ~w[spec callback]a ->
-        acc
-
-      {:attribute, _, :spec, {{name, arity}, [spec]}}, {specs, types, callbacks} ->
-        quoted = Code.Typespec.spec_to_quoted(name, spec)
-        {Map.put(specs, {name, arity}, quoted), types, callbacks}
-
-      {:attribute, _, :callback, {{name, _arity}, [spec]}}, {specs, types, callbacks} ->
-        quoted = Code.Typespec.spec_to_quoted(name, spec)
-        {specs, types, [{:callback, quoted} | callbacks]}
-
-      {:attribute, _, attrname, type}, {specs, types, callbacks} when attrname in ~w[type opaque typep]a ->
-        quoted = Code.Typespec.type_to_quoted(type)
-        {specs, [{attrname, quoted} | types], callbacks}
-
-      _, acc ->
-        acc
-    end)
   end
 
   defp remotify_local_calls(ast, module, locals) do
@@ -390,20 +408,22 @@ defmodule Tria.Compiler do
         Code.compile_quoted(lined, file)
       rescue
         e in CompileError ->
-          inspect_ast(lined, label: :failed_to_compile, with_contexts: true, highlight_line: e.line)
+          if Debug.debugging?() do
+            inspect_ast(lined, label: :failed_to_compile, with_contexts: true, highlight_line: e.line)
+          end
           reraise e, stacktrace
       end
   end
 
   @doc """
-  Converts module, name to the name in the context module
+  Converts module and name to the name in the context module
   """
   @spec fname(signature()) :: atom()
   def fname({module, kind, name, _arity}) do
     kind_name =
       case kind do
-        :defmacro -> "macro_#{name}"
-        _ -> "#{name}"
+        :defmacro -> "_macro_#{name}"
+        _ -> "_#{name}"
       end
 
     module

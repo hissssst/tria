@@ -2,7 +2,7 @@
 
 > This is an unordered dump with features to be implemented
 
-[ ] Tria annotations. Like
+[x] Tria annotations. Like
 ```elixir
 @tria pure: true, safe: true
 def pure_inspect(x) do

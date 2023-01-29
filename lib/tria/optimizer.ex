@@ -1,12 +1,16 @@
 defmodule Tria.Optimizer do
 
+  @moduledoc """
+  Main optimizing pipeline
+  """
+
   import Tria.Language, only: [inspect_ast: 2], warn: false
   alias Tria.Compiler.SSATranslator
   alias Tria.Debug.Tracer
   alias Tria.Optimizer.Pass.{Evaluation, EnumFusion, Peephole}
 
   @doc """
-  This same as `tria/1` macro, but as a function.
+  Runs optimizer pipeline on Tria AST
   """
   @spec run(Macro.t(), Keyword.t()) :: Macro.t()
   def run(quoted, opts \\ []) do
@@ -23,9 +27,8 @@ defmodule Tria.Optimizer do
   defp run_while(ast, opts) do
     ast
     |> Evaluation.run_while(opts)
-    |> EnumFusion.run_while(opts)
+    # |> EnumFusion.run_while(opts)
     |> Peephole.run_while()
-    # |> Evaluation.run_while()
   end
 
 end

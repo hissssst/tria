@@ -2,13 +2,15 @@ defmodule Tria.Optimizer.Pass.Evaluation do
 
   @moduledoc """
   This pass tries to evaluate everything what
-  can be preevaluated
+  can be preevaluated. This pass also removes
+  unused variables and unused calls
   """
 
   use Tria.Optimizer.Pass
   import Tria.Language
   import Tria.Language.Analyzer, only: [is_pure: 1, is_safe: 1]
   import Tria.Language.Binary, only: [traverse_specifier: 3]
+  import Tria.Language.MFArity, only: :macros
   import Tria.Language.Guard
   import Tria.Language.Meta
   import Tria.Language.Tri
@@ -21,13 +23,14 @@ defmodule Tria.Optimizer.Pass.Evaluation do
 
   defstruct [
     # Runtime variable which is passed during traversal.
-    # Contains a context
-    bindings: %{},
+    bindings: %{},           # Contains a context (pattern -> value)
+    used: %{},               # Contains variabled which are used anywhere (variable -> times used)
 
     # Results of the evaluation are stored here
-    hit: false,
-    used: %{},
-    evaluated: MapSet.new(),
+    hit: false,              # Marks if anything was changed during run
+    evaluated: MapSet.new(), # Marks compile-time evaluated functions
+    safe_deps: MapSet.new(), # Marks functions whose safety this pass relies upon
+    pure_deps: MapSet.new()  # Marks functions whose purity this pass relies upon
   ]
 
   @type state :: %__MODULE__{
@@ -174,7 +177,8 @@ defmodule Tria.Optimizer.Pass.Evaluation do
                       {other, acc}
                   end, nil)
 
-                {:lists.reverse(binds), hit state}
+                state = hit put_safety(state, line)
+                {:lists.reverse(binds), state}
 
               true ->
                 {[line], state}
@@ -188,10 +192,12 @@ defmodule Tria.Optimizer.Pass.Evaluation do
         safe_and_pure = is_pure(body) and is_safe(body)
         cond do
           safe_and_pure and (other[:else] in [nil, []]) ->
-            { body, hit state }
+            state = hit put_safety(state, body)
+            { body, state }
 
           safe_and_pure ->
-            run({:case, meta, [body, [do: other[:else]]]}, hit state)
+            state = hit put_safety(state, body)
+            run({:case, meta, [body, [do: other[:else]]]}, state)
 
           true ->
             run_try(the_try, state)
@@ -586,7 +592,13 @@ defmodule Tria.Optimizer.Pass.Evaluation do
             true <- is_fn(value) or vared_literal?(value) or (is_pure(value) and is_safe(value))
           ) do
             value = SSATranslator.from_tria!(value)
-            { value, hit delete_used(new_state, variable) }
+            state =
+              new_state
+              |> delete_used(variable)
+              |> put_safety(value)
+              |> hit()
+
+            { value, state }
           else
             _ -> { variable, new_state }
           end
@@ -599,6 +611,28 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   end
 
   ## Helpers
+
+  ### Puts results of safety checks from AST into the state
+  defp put_safety(state, ast) do
+    put_trait(state, ast, :safe_deps, &is_safe/1)
+  end
+
+  defp put_purity(state, ast) do
+    put_trait(state, ast, :pure_deps, &is_pure/1)
+  end
+
+  defp put_trait(state, ast, key, check) do
+    ast
+    |> filterwalk(&is_dotcall/1)
+    |> Enum.reduce(state, fn dotcall, state ->
+      mfarity = MFArity.to_mfarity(dotcall)
+      if check.(MFArity.to_dotcall mfarity) do
+        Map.update!(state, key, &MapSet.put(&1, mfarity))
+      else
+        state
+      end
+    end)
+  end
 
   defp filter_clauses([{{:yes, _}, _} = last | _tail]) do
     [last]
@@ -625,6 +659,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
         _ -> {dc, state}
       else
         result ->
+          state = Map.update!(state, :evaluated, &MapSet.put(&1, MFArity.to_mfarity(dc)))
           case bindings do
             [] ->
               state = put_evaluated(state, dc)

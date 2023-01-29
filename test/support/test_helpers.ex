@@ -1,5 +1,9 @@
 defmodule Tria.TestHelpers do
 
+  @moduledoc """
+  A bunch of helpers for testing
+  """
+
   import Tria.Language, warn: false
   require Tria.Language.Tri, as: Tri
 
@@ -32,14 +36,15 @@ defmodule Tria.TestHelpers do
     |> Macro.prewalk(fn x -> Macro.update_meta(x, & [{:generated, true} | &1]) end)
   end
 
-  defmacro abstract(do: body) do
+  defmacro abstract(vars \\ [], do: body) do
+    vars = Enum.map(vars, fn {name, meta, _} -> {name, meta, nil} end)
     name = :"Tria.Temp#{:erlang.unique_integer [:positive]}"
     quoted =
       quote do
         defmodule unquote(name) do
           @compile :debug_info
           @compile :nowarn_unused_vars
-          def f do
+          def f(unquote_splicing(vars)) do
             unquote(body)
           end
         end

@@ -1,14 +1,16 @@
 defmodule Tria.Language.FunctionRepo.Persister do
 
-  @doc """
+  @moduledoc """
   This module is a singleton genserver which periodically persists tables on disk.
-  Each table is stored using atomic file lock. This can break on some filesystems,
-
-  #TODO fix what's written above
+  Each table is stored using atomic file lock. This can break on some filesystems.
   """
 
   use GenServer
 
+  @doc """
+  Adds filetable to periodical sync operation
+  """
+  @spec add_filetable(charlist(), atom()) :: {:ok, :already_exists | :new} | {:error, :already_exists}
   def add_filetable(filename, tablename) when is_list(filename) do
     case start(filetables: %{filename => tablename}) do
       {:ok, _} ->
@@ -19,12 +21,27 @@ defmodule Tria.Language.FunctionRepo.Persister do
     end
   end
   def add_filetable(filename, _) when is_binary(filename) do
-    raise "Filename #{inspect filename} must be a charlist, sorry"
+    raise "Filename #{inspect filename} must be a charlist"
+  end
+
+  @doc """
+  Reads the data from filetable
+  """
+  @spec read_filetable(charlist(), atom()) :: :ok
+  def read_filetable(filename, tablename) do
+    case start() do
+      {:ok, pid} ->
+        GenServer.call(pid, {:read_filetable, filename, tablename})
+
+      {:error, {:already_started, pid}} ->
+        GenServer.call(pid, {:read_filetable, filename, tablename})
+    end
   end
 
   # Internal
 
-  defp start(opts) do
+  @spec start(Keyword.t()) :: GenServer.on_start()
+  defp start(opts \\ []) do
     GenServer.start(__MODULE__, opts, name: __MODULE__)
   end
 
@@ -43,6 +60,16 @@ defmodule Tria.Language.FunctionRepo.Persister do
 
   def handle_info(:tick, state) do
     {:noreply, sync(state)}
+  end
+
+  def handle_call({:read_filetable, filename, tablename}, _, state) do
+    filename
+    |> to_lockfile()
+    |> with_filelock(fn ->
+      {:ok, ^tablename} = :ets.file2tab(filename)
+      tablename
+    end)
+    {:reply, :ok, state}
   end
 
   def handle_call({:add_filetable, filename, tablename}, _, %{filetables: filetables} = state) do

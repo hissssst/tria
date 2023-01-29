@@ -2,7 +2,22 @@ defmodule Mix.Tasks.Tria.Warmup do
   use Mix.Task
 
   @moduledoc """
-  Tria warmup cache task
+  # Cache warmup
+
+  Tria uses cache ets files located in `priv` directory to
+  optimize evaluation of some function traits like purity
+  or safety. This task warms up the caches.
+
+  If you want to regenerate cache file, you can just
+  delete it and then call this task.
+
+  ### Example:
+
+  Basically you may want to run something like this once
+
+  ```sh
+  mix tria.warmup --available
+  ```
 
   ### Options:
 

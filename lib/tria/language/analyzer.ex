@@ -1,5 +1,10 @@
 defmodule Tria.Language.Analyzer do
 
+  @moduledoc """
+  Module with functions which perform some code analysis like
+  cheking functions purity or safety
+  """
+
   import Tria.Language
   alias Tria.Language.Analyzer.Purity
   alias Tria.Language.Analyzer.Safety

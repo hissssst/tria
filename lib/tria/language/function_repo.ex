@@ -54,14 +54,15 @@ defmodule Tria.Language.FunctionRepo do
   end
 
   @doc "Looks up the entry for the specified mfa and trait in maybe style"
-  @spec lookup(mfa(), trait()) :: maybe entry
-  def lookup(mfa, trait) do
+  @spec lookup(mfa(), trait(), default) :: entry | default
+  when default: any()
+  def lookup(mfa, trait, default \\ nil) do
     trait
     |> ensure_exists()
     |> :ets.lookup(MFArity.to_mfarity mfa)
     |> case do
       [{_, entry}] -> entry
-      _ -> nil
+      _ -> default
     end
   end
 
@@ -200,7 +201,7 @@ defmodule Tria.Language.FunctionRepo do
     filename = file_for_trait(trait)
     if File.exists?(filename) do
       #TODO backup system
-      {:ok, ^trait} = :ets.file2tab(filename)
+      Persister.read_filetable(filename, trait)
     else
       new_emphemeral_table(trait)
     end

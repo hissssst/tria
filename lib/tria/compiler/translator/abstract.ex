@@ -4,23 +4,28 @@ defmodule Tria.Compiler.AbstractTranslator do
   Erlang ATF to Tria translator
   It is designed to translate ATF provided in `abstract_code` chunk
   therefore it is unable to translate records, macros and parsetransforms
-
-  #TODO preserve `anno`
   """
 
   @behaviour Tria.Compiler.Translator
 
   import Tria.Language, except: [pin: 1, pin: 2, traverse: 4]
   import Tria.Language.Tri
+  alias Tria.Debug
   alias Tria.Debug.Tracer
   alias Tria.Language.Codebase
   alias Tria.Compiler.SSATranslator
 
+  @type option :: {:as_block, boolean()}
+  | {:env, Macro.Env.t()}
+  | {:locals, [{atom(), arity()}]}
+
+  @spec to_tria(list(), [option()] | Macro.Env.t()) :: Tria.t()
   def to_tria!(abstract, opts \\ []) do
     {:ok, tria, _} = to_tria(abstract, opts)
     tria
   end
 
+  @spec to_tria(list(), [option()] | Macro.Env.t()) :: {:ok, Tria.t(), list()}
   def to_tria(abstract, opts \\ [])
   def to_tria(abstract, %Macro.Env{} = env) do
     to_tria(abstract, env: env)
@@ -41,13 +46,11 @@ defmodule Tria.Compiler.AbstractTranslator do
     |> with_pdict(fn ->
       tria =
         abstract
-        # |> IO.inspect(label: :abstract)
         |> traverse_function.()
         |> Tracer.tag_ast(label: :abstract_pre_ssa)
         |> Tracer.tag(label: :abstract_pre_ssa_ast, pretty: true)
         |> to_ssa(pin_known: true)
         |> Tracer.tag_ast(label: :abstract_after_ssa)
-        # |> inspect_ast(label: :abstracted)
 
       {:ok, tria, []}
     end)
@@ -86,15 +89,15 @@ defmodule Tria.Compiler.AbstractTranslator do
 
       # If
       {:if, anno, clauses} ->
-        #TODO needs testing
-        clauses =
-          clauses
-          |> traverse()
-          |> Enum.map(fn {:"->", meta, [[{:when, _, [condition]}], body]} ->
-            {:"->", meta, [[condition], body]}
-          end)
+        meta = meta(anno)
 
-        {:cond, meta(anno), [[do: clauses]]}
+        false_body = dot_call(:erlang, :error, [:if_clause], meta, meta)
+        clauses = [head_case | tail] = Enum.reverse traverse clauses
+        last_case = arrow_to_case(head_case, false_body)
+
+        tail
+        |> Enum.reduce(last_case, fn clause, false_body -> arrow_to_case(clause, false_body) end)
+        |> postwalk(&with_meta(&1, meta))
 
       # List comprehension
       {:lc, anno, body, [{:b_generate, banno, bin, input}]} ->
@@ -325,7 +328,9 @@ defmodule Tria.Compiler.AbstractTranslator do
     end
   rescue
     e ->
-      IO.inspect(abstract, label: :failed_abstract, pretty: true, limit: :infinity)
+      if Debug.debugging?() do
+        IO.inspect(abstract, label: :failed_abstract, pretty: true, limit: :infinity)
+      end
       reraise(e, __STACKTRACE__)
   end
 
@@ -405,13 +410,38 @@ defmodule Tria.Compiler.AbstractTranslator do
     end)
   end
 
+  # Used for translation of Erlang `if`
+  defp arrow_to_case({:"->", _, [[{:when, _, [pattern, guards]}], right]}, false_body) do
+    tri do
+      case pattern do
+        true when guards -> right
+        _ -> false_body
+      end
+    end
+  end
+  defp arrow_to_case({:"->", _, [[{:when, _, [guards]}], right]}, false_body) do
+    tri do
+      case [] do
+        _ when guards -> right
+        _ -> false_body
+      end
+    end
+  end
+  defp arrow_to_case({:"->", _, [[left], right]}, false_body) do
+    tri do
+      case left do
+        true -> right
+        _ -> false_body
+      end
+    end
+  end
+
   ### Block
   defp traverse_block([line]), do: traverse(line)
   defp traverse_block(lines) when is_list(lines), do: {:__block__, [], traverse(lines)}
   defp traverse_block(line), do: traverse(line)
 
   defp traverse_tsl(tsl) when is_list(tsl) do
-    # IO.inspect tsl, label: :tsl
     join(tsl, :"-", &traverse_tsl/1)
   end
   defp traverse_tsl({type, size}), do: {type, [], [traverse(size)]}
@@ -535,7 +565,7 @@ defmodule Tria.Compiler.AbstractTranslator do
   end
 
   defp pin(var, anno) when is_variable(var), do: {:"^", meta(anno), [var]}
-  defp pin(other, _anno), do: other
+  defp pin(other, anno), do: with_meta(other, meta(anno))
 
   defp erlang_funcs do
     case Process.get(:erlang_funcs, nil) do

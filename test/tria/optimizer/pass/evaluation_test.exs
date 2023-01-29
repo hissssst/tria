@@ -6,6 +6,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
   import Tria.TestHelpers
 
   alias Tria.Optimizer.Pass.Evaluation, as: Evaluation
+  alias Tria.Language.FunctionRepo
 
   @tri_opts meta: false, to_ssa: true
 
@@ -18,6 +19,10 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
 
   describe "Structural evaluation" do
     test "Block joining" do
+      for i <- 1..7 do
+        FunctionRepo.insert({M, :"x#{i}", 0}, :safe_cache, false)
+        FunctionRepo.insert({M, :"x#{i}", 0}, :pure_cache, false)
+      end
       tri do
         (M.x1(); M.x2()); (M.x3(); M.x4()); (M.x5(); M.x6(); M.x7())
       end
@@ -28,6 +33,9 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
     end
 
     test "Block literal removal" do
+      FunctionRepo.insert({M, :f, 0}, :safe_cache, false)
+      FunctionRepo.insert({M, :f, 0}, :pure_cache, false)
+
       tri do
         1; 2; M.f(); 3; 4; 5
       end
@@ -299,6 +307,9 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
     end
 
     test "List, map, tuple and function arguments" do
+      FunctionRepo.insert({M, :f, 1}, :pure_cache, false)
+      FunctionRepo.insert({M, :f, 1}, :safe_cache, false)
+
       tri do
         [x = 1, x = 2 | x = 3]
         M.f(x) # Here we use `f` to make sure that block optimization does not kick in
@@ -609,12 +620,12 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         opts = Keyword.put(opts, :restart, :temporary)
         opts = Keyword.put(opts, :option, :value)
         # Note double `r` on the end to avoid evaluating this code
-        GenServerr.start_link(__MODULE__, [], opts)
+        GenServer.start_link(__MODULE__, [], opts)
       end
       |> run_while()
       |> last_line()
       |> assert_tri do
-        GenServerr.start_link(tri(__MODULE__), [], option: :value, restart: :temporary, name: tri(__MODULE__))
+        GenServer.start_link(tri(__MODULE__), [], option: :value, restart: :temporary, name: tri(__MODULE__))
       end
     end
 
@@ -732,8 +743,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
              %{"x" => x} = map ->
                with {:ok, y} <- function.(x) do
                  {:ok, %{map | "x" => y}}
-               else
-                 []
                end
 
              _ ->
@@ -753,8 +762,6 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
                %{"y" => x} = map ->
                  with {:ok, y} <- function.(x) do
                    {:ok, %{map | "y" => y}}
-                 else
-                   []
                  end
 
                _ ->
@@ -1113,6 +1120,9 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
     end
 
     test "Defined variable remains present" do
+      FunctionRepo.insert({S, :__struct__, 0}, :safe_cache, true)
+      FunctionRepo.insert({S, :__struct__, 0}, :pure_cache, true)
+
       tri do
         structure = tri(S).__struct__()
 
@@ -1188,6 +1198,8 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
 
     @tag skip: true
     test "Block unused removal with fn" do
+      FunctionRepo.insert({M, :f, 0}, :pure_cache, false)
+      FunctionRepo.insert({M, :f, 0}, :safe_cache, false)
       tri do
         x = [1, fn x -> y = M.f(); x + y end]
         {x, x}

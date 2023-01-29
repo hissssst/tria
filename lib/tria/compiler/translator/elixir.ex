@@ -14,6 +14,8 @@ defmodule Tria.Compiler.ElixirTranslator do
   * No local calls
   * No `rescue` in `try`
   * `after` in `receive` is twople instead of right arrow
+  * No `cond`
+  * Left part of `->`, `=`, `<-` is always a pattern!
 
   These changes add some rules and remove some exceptions to make
   reasoning about language simpler. For example, in `left -> right` left is always pattern and right is always body

@@ -52,13 +52,12 @@ export TRIA_DEBUG=1
 export TRIA_TRACE="Module.function/1,Foo.bar/2"
 ```
 
-This will print all steps of compilation of the `Module.function/arity` function . Each step will be named and will be possible to grep in the exact same format
+This will print all steps of compilation of the `Module.function/arity` function . Each step will be named and will be possible to grep in the exact same format.
+Plus, `TRIA_DEBUG` increases verbosity of compiler and generates `tria_global_context.ex` file which contains the final version of the code after all optimizations.
 
 ## Tria language
 
 Tria is a language, it differs from Elixir, but it is mostly Elixir
-and it is represented similary to `Macro.t()`.
-
-Tria has no imports, requires, macros, aliases,
-aliased modules. Variables can have integer contexts (useful for SSA form).
-Tria has no `for` (almost), `cond`, `if`, `.` (in a regular sense).
+and it is represented similary to `Macro.t()`. Tria is designed specifically
+for optimizing transformations, like any IR language and has a specific
+Single Static Assignment form translator.

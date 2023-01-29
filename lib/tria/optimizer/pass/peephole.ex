@@ -47,8 +47,8 @@ defmodule Tria.Optimizer.Pass.Peephole do
               end
 
             :safe ->
-              case FunctionRepo.exists_any?([:pure_cache, :pure], function: key, arity: 0) do
-                [] ->
+              case FunctionRepo.exists_any?([:defined, :pure_cache, :pure], function: key, arity: 0) do
+                false ->
                   Tracer.tag_ast(ast, label: :hits_peephole_dot)
                   tri to_ssa: true do
                     %{key => value} = input

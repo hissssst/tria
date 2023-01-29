@@ -264,7 +264,7 @@ defmodule Tria.Language.Interpreter do
       end)
 
     cond do
-      length(hopes) == 0 ->
+      hopes == [] ->
         level_binds
 
       length(hopes) > length(asts) ->

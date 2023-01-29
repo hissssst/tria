@@ -6,6 +6,8 @@ defmodule Tria.Language.Ternary do
   @type t :: :yes | :maybe | :no
   @type t(something) :: {:yes | :maybe, something} | :no
 
+  import Kernel, except: [&&: 2, ||: 2]
+
   defmacro __using__(_opts) do
     imports =
       __CALLER__.functions

@@ -39,7 +39,7 @@ defmodule Tria.Compiler.ContextServer do
   """
   @spec emit_definition(t(), Compiler.definition()) :: :ok
   def emit_definition(context, definition) do
-    call(context, {:add_definition, definition})
+    call(context, {:emit_definition, definition})
   end
 
   @doc """
@@ -100,7 +100,7 @@ defmodule Tria.Compiler.ContextServer do
     {:noreply, state}
   end
 
-  def handle_call({:add_definition, {{module, kind, name, arity}, clauses}}, _from, %{definitions: definition} = state) do
+  def handle_call({:emit_definition, {{module, kind, name, arity}, clauses}}, _from, %{definitions: definition} = state) do
     definition = Map.put(definition, {module, name, arity}, {kind, clauses})
     {:reply, :ok, %{state | definitions: definition}}
   end
@@ -158,20 +158,30 @@ defmodule Tria.Compiler.ContextServer do
     end)
     |> Enum.flat_map(fn {{module, kind, name, arity} = signature, the_fn} ->
       fname = Compiler.fname(signature)
+      mfarity = {module, name, arity}
 
       clauses =
         try do
-          Tracer.with_local_trace({module, name, arity}, fn ->
+          Tracer.with_local_trace(mfarity, fn ->
             the_fn
             |> Tracer.tag_ast(label: :before_passes)
-            |> Optimizer.run(remove_unused: false)
+            |> then(fn ast ->
+              if FunctionRepo.lookup(mfarity, :optimize, true) do
+                opts = FunctionRepo.lookup(mfarity, :optimizer_opts, [remove_unused: false])
+                Optimizer.run(ast, opts)
+              else
+                ast
+              end
+            end)
             |> contextify_local_calls(definitions)
             |> Tracer.tag_ast(label: :generating)
             |> Compiler.fn_to_clauses()
           end)
         rescue
           e ->
-            IO.puts "Failed generation for #{module}.#{name}/#{arity}"
+            if Debug.debugging?() do
+              IO.puts "Failed generation for #{module}.#{name}/#{arity}"
+            end
             reraise e, __STACKTRACE__
         end
 

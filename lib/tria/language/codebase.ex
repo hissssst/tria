@@ -66,17 +66,38 @@ defmodule Tria.Language.Codebase do
   @doc """
   Fetches attribute value from BEAM's abstract code
   """
-  @spec fetch_attribute(list() | module() | binary(), atom()) :: {:ok, any()} | :error
+  @spec fetch_attribute(list() | module() | binary(), atom()) :: {:ok, [any()]} | :error
   def fetch_attribute(abstract_code, name) when is_list(abstract_code) do
-    Enum.find_value(abstract_code, :error, fn
-      {:attribute, _, ^name, value} -> {:ok, value}
-      _ -> false
-    end)
+    values =
+      for {:attribute, _, ^name, value} <- abstract_code do
+        value
+      end
+
+    case values do
+      [] -> :error
+      values -> {:ok, values}
+    end
   end
   def fetch_attribute(module_or_binary, name) do
     with {:ok, ac} <- fetch_abstract_code(module_or_binary) do
       fetch_attribute(ac, name)
     end
+  end
+
+  @spec fetch_attribute(list(), [atom()]) :: %{atom() => any()}
+  def fetch_attributes(abstract_code, names) when is_list(abstract_code) do
+    acc = Map.new(names, fn name -> {name, []} end)
+    Enum.reduce(abstract_code, acc, fn
+      {:attribute, _, name, value}, acc ->
+        if name in names do
+          Map.update!(acc, name, &[value | &1])
+        else
+          acc
+        end
+
+      _, acc ->
+        acc
+    end)
   end
 
   # Tria tables

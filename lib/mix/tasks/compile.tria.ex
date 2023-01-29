@@ -1,5 +1,9 @@
 defmodule Mix.Tasks.Compile.Tria do
 
+  @moduledoc """
+  Mix task for running Tria optimizing compiler
+  """
+
   use Mix.Task.Compiler
 
   alias Tria.Compiler
@@ -19,7 +23,7 @@ defmodule Mix.Tasks.Compile.Tria do
       "TRIA_TRACE"
       |> System.get_env("")
       |> Tracer.parse_trace_env()
-      |> Enum.map(&Tracer.trace(&1, only: :all))
+      |> Enum.each(&Tracer.trace(&1, only: :all))
     end
 
     root = Path.dirname Mix.Project.project_file()
@@ -70,8 +74,9 @@ defmodule Mix.Tasks.Compile.Tria do
             _ -> []
           end
 
-        other ->
-          raise "Unrecognized filetype #{inspect other} for #{path}"
+        %{type: other} ->
+          IO.warn "Unrecognized filetype #{inspect other} for #{path}"
+          []
       end
     end)
   end
