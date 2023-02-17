@@ -9,7 +9,6 @@ defmodule Tria.Debug.Tracer do
 
   import Tria.Language, only: [ast_to_string: 2], warn: false
   alias Tria.Language.MFArity
-  # import Tria.Compiler, only: [fname: 1]
 
   @doc """
   Adds one function or multiple functions to the tracing.
@@ -77,13 +76,31 @@ defmodule Tria.Debug.Tracer do
   def parse_trace_env(string) do
     "[#{string}]"
     |> Code.string_to_quoted!()
-    |> Enum.map(fn {:/, _, [{{:".", _, [{:__aliases__, _, aliases}, function]}, _, _}, arity]} when is_integer(arity) and is_atom(function) ->
-      {Module.concat(aliases), function, arity}
-    end)
+    |> parse_trace_ast()
   rescue
-    exception ->
+    exception in [TokenMissingError, SyntaxError] ->
       IO.warn "Tracing string syntax is incorrect"
       reraise exception, __STACKTRACE__
+  end
+
+  @doc """
+  Parses tracing ast
+
+  ## Example:
+
+      iex> parse_trace_ast quote do: [Foo.bar/2, Boo.far/0]
+      [{Foo, :bar, 2}, {Boo, :far, 0}]
+  """
+  @spec parse_trace_ast([Macro.t()]) :: [MFArity.mfarity()]
+  def parse_trace_ast(ast) when is_list(ast) do
+    Enum.map(ast, fn
+      {:/, _, [{{:".", _, [{:__aliases__, _, aliases}, function]}, _, _}, arity]}
+      when is_integer(arity) and is_atom(function) ->
+        {Module.concat(aliases), function, arity}
+    end)
+  end
+  def parse_trace_ast(arg) do
+    raise ArgumentError, "Expected a list of signatures, got #{inspect arg}"
   end
 
   defp do_trace({module, _kind, function, arity}, data, inspector, label) do

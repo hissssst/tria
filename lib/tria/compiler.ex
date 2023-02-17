@@ -1,7 +1,7 @@
 defmodule Tria.Compiler do
 
   @moduledoc """
-  Interface for compiling Elixir mix projects.
+  Entry-point for compiling Elixir projects.
   """
 
   @typedoc """
@@ -35,14 +35,19 @@ defmodule Tria.Compiler do
   @type the_fn :: {:fn, list(), [Tria.t() | Macro.t()]}
 
   import Tria.Language
+  import Tria.Language.Guard
   alias Tria.Compiler.AbstractTranslator
   alias Tria.Compiler.Annotations
   alias Tria.Compiler.ContextServer
+  alias Tria.Compiler.ElixirCompiler
   alias Tria.Compiler.ElixirTranslator
+  alias Tria.Compiler.Manifest
   alias Tria.Debug
   alias Tria.Debug.Tracer
   alias Tria.Language.Binary
   alias Tria.Language.Codebase
+  alias Tria.Language.FunctionRepo
+  alias Tria.Language.FunctionGraph
 
   @special_functions [__info__: 1, __struct__: 2, __struct__: 1, __impl__: 1]
 
@@ -56,9 +61,11 @@ defmodule Tria.Compiler do
 
   - `:context` -- (required) tria context module to compile given paths to
   - `:build_path` -- (required) the path which will be used to store the .beam files
+  - `:manifest` -- manifest of already compiled project. When omitted, project is recompiled from scratch
   """
   @type compile_option :: {:context, module()}
   | {:build_path, Path.type(:absolute)}
+  | {:manifest, Manifest.t()}
 
   @doc """
   Entry point in a compilation process.
@@ -71,55 +78,103 @@ defmodule Tria.Compiler do
 
   3. Caller calls `recompile_from_beam/3`
   """
-  @spec compile([Path.type(:absolute)], [compile_option()] | map()) :: [{module(), binary()}]
+  @spec compile([Path.type(:absolute)], [compile_option()] | map()) :: {Manifest.t(), [{module(), binary()}]}
   def compile(paths, opts) when is_list(opts), do: compile(paths, Map.new(opts))
-  def compile(paths, %{build_path: build_path, context: context} = opts) do
-    caller = self()
+  def compile(paths, opts) when is_map(opts) do
+    %{manifest: manifest} = opts = Map.put_new_lazy(opts, :manifest, fn -> %Manifest{} end)
 
-    Kernel.ParallelCompiler.compile(paths, [
+    changed_files =
+      manifest
+      |> Manifest.diff_files(paths)
+      |> Debug.inspect(label: :changed_files)
+
+    compile_files_diff(changed_files, paths, opts)
+  end
+
+  defp compile_files_diff([], _, %{manifest: manifest}), do: {manifest, []}
+  defp compile_files_diff(files_diff, _paths, %{build_path: build_path, context: context, manifest: manifest} = opts) do
+    caller = self()
+    added_and_changed = for {x, file} when x in ~w[added changed]a <- files_diff, do: file
+
+    ElixirCompiler.parallel_compile(added_and_changed, [
+      # Code options
+      ignore_module_conflict: true,
+      no_warn_undefined: :all,
+      trace_deps: true,
+      debug_info: true,
+
+      # ParallelCompiler options
       dest: build_path,
       each_module: fn file, module, bytecode ->
-        send(caller, {:compiled, {module, bytecode, file}})
+        send(caller, {:last_cycle_compiled, {module, bytecode, file}})
+      end,
+      each_cycle: fn graphs ->
+        last_cycle_compiled = compiled(:last_cycle_compiled)
+        modules =
+          for {module, bytecode, file} <- last_cycle_compiled do
+            send(caller, {:compiled, {module, bytecode, file}})
+            module
+          end
+
+        for {graph, links} <- graphs, do: FunctionGraph.relink_many(graph, links)
+
+        manifest = Manifest.reflect_graphs(manifest)
+        dependant_modules = Manifest.compile_time_dependants(manifest, modules)
+        files = Manifest.infer_files(manifest, dependant_modules)
+
+        Debug.inspect(modules, label: :modules)
+        Debug.inspect(dependant_modules, label: :dependants)
+        Debug.inspect(files, label: :files_of_dependants)
+
+        {:compile, files, []}
       end
     ])
 
-    with_compiler_options([ignore_module_conflict: true, no_warn_undefined: :all], fn ->
-      modules =
-        Enum.map(compiled(), fn {module, bytecode, file} ->
-          opts = Map.put(opts, :file, file)
-          Code.ensure_compiled!(module)
-          recompile_from_beam(module, bytecode, opts)
-        end)
+    changed_files = for {:changed, file} <- files_diff, do: file
 
-      context_modules = ContextServer.generate(context)
-      context_modules ++ modules
-    end)
+    compiled = compiled(:compiled)
+    compiled_modules = MapSet.new(compiled, fn {module, _, _} -> module end)
+    was_modules = Manifest.infer_modules(manifest, changed_files)
+
+    new_modules = MapSet.difference(compiled_modules, was_modules)
+    removed_modules = MapSet.difference(was_modules, compiled_modules)
+    changed_modules = MapSet.intersection(compiled_modules, was_modules)
+
+    Debug.inspect(new_modules, label: :new_modules)
+    Debug.inspect(removed_modules, label: :removed_modules)
+    Debug.inspect(changed_modules, label: :changed_modules)
+
+    file_to_modules =
+      Enum.reduce(compiled, %{}, fn {module, _, file}, acc ->
+        Map.update(acc, file, MapSet.new([module]), &MapSet.put(&1, module))
+      end)
+
+    manifest =
+      manifest
+      |> Manifest.apply_diff(files_diff)
+      |> Manifest.update_file_to_modules(file_to_modules)
+
+    ContextServer.restore(opts.context)
+    ContextServer.emit_difference(opts.context, new_modules, removed_modules, changed_modules)
+
+    modules =
+      Enum.map(compiled, fn {module, bytecode, file} ->
+        ElixirCompiler.ensure_compiled!(module)
+        recompile_from_beam(module, bytecode, Map.put(opts, :file, file))
+      end)
+
+    context_modules = ContextServer.generate(context)
+    modules = context_modules ++ modules
+
+    manifest = Manifest.reflect_graphs(manifest)
+    {manifest, modules}
   end
 
-  @spec compiled() :: list()
-  defp compiled do
-    # I feel very smart about this
+  @spec compiled(any()) :: list()
+  defp compiled(prefix) do
     receive do
-      {:compiled, message} -> [message | compiled()]
+      {^prefix, message} -> [message | compiled(prefix)]
       after 0 -> []
-    end
-  end
-
-  @spec with_compiler_options(Keyword.t(), (() -> any())) :: any()
-  defp with_compiler_options(options, func) do
-    was =
-      Enum.map(options, fn {key, value} ->
-        was = Code.get_compiler_option(key)
-        Code.put_compiler_option(key, value)
-        {key, was}
-      end)
-
-    try do
-      func.()
-    after
-      Enum.each(was, fn {key, value} ->
-        Code.put_compiler_option(key, value)
-      end)
     end
   end
 
@@ -147,6 +202,7 @@ defmodule Tria.Compiler do
     recompile_from_beam(module, binary, Map.new(opts))
   end
   def recompile_from_beam(module, binary, %{context: context, file: file}) do
+    docs = fetch_docs(module, binary)
     {:ok, ac} = Codebase.fetch_abstract_code(binary)
 
     %{
@@ -161,47 +217,22 @@ defmodule Tria.Compiler do
 
     public = Enum.concat(public)
 
-    types =
-      [
-        Enum.map(type, fn x -> {:type, x} end),
-        Enum.map(typep, fn x -> {:typep, x} end),
-        Enum.map(opaque, fn x -> {:opaque, x} end)
-      ]
-      |> Enum.concat()
-      |> Enum.map(fn {kind, type} ->
-        {kind, Code.Typespec.type_to_quoted(type)}
-      end)
+    types = prepare_types(type, typep, opaque)
+    specs = prepare_specs(specs)
+    callbacks = prepare_callbacks(callbacks)
 
-    specs =
-      specs
-      |> Map.new(fn {{name, _arity} = key, values} ->
-        values = Enum.map(values, &Code.Typespec.spec_to_quoted(name, &1))
-        {key, values}
-      end)
-      |> Map.delete({:__info__, 1})
-
-    callbacks =
-      Enum.map(callbacks, fn {{name, _arity}, [value]} ->
-        {:callback, Code.Typespec.spec_to_quoted(name, value)}
-      end)
-
-    locals =
-      for {:function, _anno, name, arity, _clauses} <- ac do
-        {name, arity}
-      end
+    locals = for {:function, _anno, name, arity, _clauses} <- ac, do: {name, arity}
 
     annotations
     |> Enum.map(fn [{kind, name, arity, opts}] -> {{module, kind, name, arity}, opts} end)
     |> Annotations.put_annotations()
 
-    docs = fetch_docs(binary)
-
     delegations =
       for {:function, anno, name, arity, clauses} <- ac do
         {kind, arity} = kind_of(name, arity, public)
         name = unmacro_name(name)
-
         signature = {module, kind, name, arity}
+
         fn_clauses =
           Tracer.with_local_trace(signature, fn ->
             clauses
@@ -212,8 +243,7 @@ defmodule Tria.Compiler do
             |> Tracer.tag(label: :after_translation, pretty: true)
           end)
 
-        if name == :__adapter__, do: IO.puts "IT EXISTS\n\n\n"
-        Tria.Language.FunctionRepo.insert({module, name, arity}, :defined, true)
+        FunctionRepo.insert({module, name, arity}, :defined, true)
 
         clauses = fn_to_clauses(fn_clauses)
         definition = {signature, clauses}
@@ -230,22 +260,40 @@ defmodule Tria.Compiler do
       end
 
     ContextServer.mark_ready(context, module)
-    body = {:__block__, [], delegations}
-    body = prepend_attrs(body, callbacks ++ types)
+
+    body =
+      {:__block__, [], delegations}
+      |> prepend_attrs(callbacks ++ types)
+      |> put_file(file)
 
     [{^module, binary}] =
-      {:defmodule, [], [module, [do: body]]}
-      |> Code.compile_quoted(file)
+      {:defmodule, [file: file], [module, [do: body]]}
+      |> ElixirCompiler.compile_quoted(file: file, ignore_module_conflict: true, no_warn_undefined: :all)
 
     {module, binary}
   end
 
-  defp fetch_docs(binary) do
-    #FIXME 'Docs' is unstable. Improve fetching
-    {:ok, doc} = Codebase.fetch_chunk(binary, 'Docs')
-    {:docs_v1, _, :elixir, "text/markdown", _, _, docs} = :erlang.binary_to_term(doc)
-    for {{k, name, arity}, _, _, %{"en" => doc}, _} when k in ~w[macro function]a <- docs, into: %{} do
-      {{name, arity}, doc}
+  defp fetch_docs(module, binary) do
+    try do
+      {:ok, doc} = Codebase.fetch_chunk(binary, ~c"Docs")
+      :erlang.binary_to_term(doc)
+    rescue
+      ArgumentError ->
+        Debug.puts "Non BERT docs format for #{module}, continuing without docs"
+        %{}
+
+      MatchError ->
+        Debug.puts "Failed to fetch docs chunk for #{module}, continuing without docs"
+        %{}
+    else
+      {:docs_v1, _, :elixir, "text/markdown", _, _, docs} ->
+        for {{k, name, arity}, _, _, %{"en" => doc}, _} when k in ~w[macro function]a <- docs, into: %{} do
+          {{name, arity}, doc}
+        end
+
+      docs ->
+        Debug.puts "Unexpected docs format for #{module}, #{inspect docs}, continuing without docs"
+        %{}
     end
   end
 
@@ -270,6 +318,37 @@ defmodule Tria.Compiler do
 
       other ->
         other
+    end)
+  end
+
+  ### Helpers for preparing module attributes
+
+  defp prepare_types(type, typep, opaque) do
+    [
+      Enum.map(type, fn x -> {:type, x} end),
+      Enum.map(typep, fn x -> {:typep, x} end),
+      Enum.map(opaque, fn x -> {:opaque, x} end)
+    ]
+    |> Enum.concat()
+    |> Enum.map(fn {kind, type} ->
+      {kind, Code.Typespec.type_to_quoted(type)}
+    end)
+  end
+
+  defp prepare_specs(specs) do
+    Enum.reduce(specs, %{}, fn
+      {{:__info__, 1}, _}, acc ->
+        acc
+
+      {{name, _arity} = key, values}, acc ->
+        values = Enum.map(values, &Code.Typespec.spec_to_quoted(name, &1))
+        Map.put(acc, key, values)
+    end)
+  end
+
+  defp prepare_callbacks(callbacks) do
+    Enum.map(callbacks, fn {{name, _arity}, [value]} ->
+      {:callback, Code.Typespec.spec_to_quoted(name, value)}
     end)
   end
 
@@ -348,6 +427,7 @@ defmodule Tria.Compiler do
     |> Tracer.tag_ast(key: {module, name, arity}, label: :delegated)
   end
 
+  @spec prepend_attrs(Macro.t(), [{atom(), nil | Macro.t()}]) :: Macro.t()
   defp prepend_attrs(quoted, []), do: quoted
   defp prepend_attrs(quoted, [{_name, nil} | tail]) do
     prepend_attrs(quoted, tail)
@@ -377,44 +457,6 @@ defmodule Tria.Compiler do
     end)
   end
 
-  ## Other public functions
-
-  def save(build_path, module, binary) do
-    filename = Path.join(build_path, "#{module}.beam")
-    File.write!(filename, binary)
-
-    :code.add_path to_charlist Path.dirname filename
-    :code.purge module
-    :code.load_file module
-  end
-
-  @doc """
-  Like `Code.compile_quoted/2` but notes the place where
-  compilation error occured
-  """
-  @spec compile_quoted(Macro.t(), Path.t()) :: [{module(), binary()}]
-  def compile_quoted(quoted, file \\ "nofile") do
-    Code.compile_quoted(quoted, file)
-  rescue
-    CompileError ->
-      stacktrace = __STACKTRACE__
-
-      lined =
-        postwalk(quoted, fn ast ->
-          Macro.update_meta(ast, &Keyword.put(&1, :line, :erlang.unique_integer([:positive])))
-        end)
-
-      try do
-        Code.compile_quoted(lined, file)
-      rescue
-        e in CompileError ->
-          if Debug.debugging?() do
-            inspect_ast(lined, label: :failed_to_compile, with_contexts: true, highlight_line: e.line)
-          end
-          reraise e, stacktrace
-      end
-  end
-
   @doc """
   Converts module and name to the name in the context module
   """
@@ -428,10 +470,26 @@ defmodule Tria.Compiler do
 
     module
     |> Module.split()
-    |> Enum.map(&snake/1)
     |> Kernel.++([kind_name])
     |> Enum.join("_")
     |> String.to_atom()
+  end
+
+  @spec unfname(atom()) :: {module(), atom()}
+  def unfname(name) do
+    [module | function] =
+      name
+      |> Atom.to_string()
+      |> String.split("__")
+
+    function = Enum.join(function, "__")
+
+    module =
+      module
+      |> String.split("_")
+      |> Module.concat()
+
+    {module, String.to_atom(function)}
   end
 
   @doc """
@@ -441,7 +499,7 @@ defmodule Tria.Compiler do
   def clauses_to_fn(clauses) when is_list(clauses) do
     fn_clauses =
       Enum.flat_map(clauses, fn {args, guards, body} ->
-        args = add_guards(args, guards)
+        args = append_guards(args, guards)
         body =
           case body do
             [do: body] -> body
@@ -491,7 +549,7 @@ defmodule Tria.Compiler do
           quote do: unquote(kind)(unquote(name)(unquote_splicing args), unquote(body))
 
         {args, guards, body} ->
-          quote do: unquote(kind)(unquote(name)(unquote_splicing args) when unquote(join_guards guards), unquote(body))
+          quote do: unquote(kind)(unquote(name)(unquote_splicing args) when unquote(join_when guards), unquote(body))
       end)
 
     {:__block__, [], defs}
@@ -499,45 +557,22 @@ defmodule Tria.Compiler do
 
   # Helpers
 
-  # Converts camel case strings to snake case
-  defp snake(""), do: ""
-  defp snake(<<first, second, rest :: binary>>) when first not in ?A..?Z and second in ?A..?Z do
-    <<first, ?_, second - ?A + ?a>> <> snake(rest)
-  end
-  defp snake(<<upper, rest :: binary>>) when upper in ?A..?Z do
-    <<upper - ?A + ?a>> <> snake(rest)
-  end
-  defp snake(<<other, rest :: binary>>) do
-    <<other>> <> snake(rest)
-  end
-
-  defp add_guards(args, []), do: args
-  defp add_guards(args, guards) do
-    guard = join_guards guards
-    [{:when, [], args ++ [guard]}]
-  end
-
-  def join_guards([guard]), do: guard
-  def join_guards([guard | guards]) do
-    {:when, [], [guard, join_guards(guards)]}
-  end
-
-  defp unjoin_guards({:when, _, [guard, guards]}), do: [guard | unjoin_guards guards]
-  defp unjoin_guards(guard), do: [guard]
-
-  defp pop_guards([{:when, _, args_and_guards}]) do
-    {guards, args} = List.pop_at(args_and_guards, -1)
-    {unjoin_guards(guards), args}
-  end
-  defp pop_guards(args), do: {[], args}
-
   defp kind_of(name, arity, public) do
-    if String.starts_with?("#{name}", "MACRO-") do
-      if {name, arity} in public,
-        do: {:defmacro, arity - 1},
-        else: {:defmacrop, arity - 1}
+    name
+    |> to_string()
+    |> String.starts_with?("MACRO-")
+    |> if do
+      if {name, arity} in public do
+        {:defmacro, arity - 1}
+      else
+        {:defmacrop, arity - 1}
+      end
     else
-      if {name, arity} in public, do: {:def, arity}, else: {:defp, arity}
+      if {name, arity} in public do
+        {:def, arity}
+      else
+        {:defp, arity}
+      end
     end
   end
 

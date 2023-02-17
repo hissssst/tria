@@ -7,6 +7,7 @@ defmodule Tria.Language.Guard do
   import Tria.Language
   import Tria.Language.Tri
   import Tria.Language.Binary, only: [traverse_specifier: 3]
+  alias Tria.Language.Meta
 
   @checks [
     # Checks
@@ -185,16 +186,21 @@ defmodule Tria.Language.Guard do
       other ->
         Macro.quoted_literal?(other)
     end
-    # |> tap(fn r ->
-    #   IO.inspect(ast, label: :ast)
-    #   IO.inspect(r, label: :result)
-    # end)
   end
 
-  @spec append_guard([Tria.t()], Tria.t() | nil) :: [Tria.t()]
-  def append_guard(args, nil), do: args
-  def append_guard(args, guard) do
-    [{:when, [], args ++ [guard]}]
+  @spec append_guard([Tria.t()], Tria.t() | nil, Meta.t()) :: [Tria.t()]
+  def append_guard(args, guard, meta \\ [])
+  def append_guard(args, nil, _meta), do: args
+  def append_guard(args, guard, meta) do
+    [{:when, meta, args ++ [guard]}]
+  end
+
+  @spec append_guards([Tria.t()], [Tria.t()], Meta.t()) :: [Tria.t()]
+  def append_guards(args, guards, meta \\ [])
+  def append_guards(args, [], _meta), do: args
+  def append_guards(args, guards, meta) do
+    whened = join_when(guards, meta)
+    [{:when, meta, args ++ [whened]}]
   end
 
   @spec pop_guard([Tria.t()]) :: {guard :: Tria.t(), args :: Tria.t()}
@@ -203,11 +209,20 @@ defmodule Tria.Language.Guard do
   end
   def pop_guard(args), do: {nil, args}
 
+  @spec pop_guards([Tria.t()]) :: {guard :: Tria.t(), args :: Tria.t()}
+  def pop_guards([{:when, _meta, args_and_guards}]) do
+    {guards, args} = List.pop_at(args_and_guards, -1)
+    {unjoin_when(guards), args}
+  end
+  def pop_guards(args), do: {[], args}
+
+  @spec unjoin_when(Tria.t()) :: [Tria.t()]
   def unjoin_when({:when, _, [left, right]}) do
     [left | unjoin_when(right)]
   end
-  def unjoin_when(other), do: other
+  def unjoin_when(other), do: [other]
 
+  @spec join_when([Tria.t()], Meta.t()) :: Tria.t()
   def join_when(guards, meta \\ [])
   def join_when([other], _), do: other
   def join_when([head | tail], meta), do: {:when, meta, [head, join_when(tail, meta)]}

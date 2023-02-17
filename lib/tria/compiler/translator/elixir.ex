@@ -29,6 +29,7 @@ defmodule Tria.Compiler.ElixirTranslator do
   import Tria.Language.Tri
   import Tria.Language.Meta
 
+  alias Tria.Debug
   alias Tria.Language.Codebase
   alias Tria.Language.Guard
 
@@ -110,19 +111,32 @@ defmodule Tria.Compiler.ElixirTranslator do
     handle_breakpoint(point)
     { nil, env }
   end
+
   # Explicitly do this before expansion
   defp expand_all({:__aliases__, _, _} = aliased, env) do
     { unalias(aliased, env), env }
   end
+
   # __ENV__ is ****ing special because it has non-ast forms inside
   defp expand_all({:__ENV__, _, _}, env) do
     { Macro.escape(env), env }
   end
 
-  defp expand_all(ast, env) do
-    # IO.inspect(env.context, label: :context)
-    # IO.inspect(ast, label: :ast)
+  # Defmodule and other defs
+  defp expand_all({:defmodule, meta, [name, [do: body]]}, env) do
+    inner_env = add_module(env, name)
+    { body, _ } = expand_all(body, inner_env)
+    { {:defmodule, meta, [name, [do: body]]}, env }
+  end
 
+  defp expand_all({kind, meta, [{name, smeta, args}, body]}, env) when kind in ~w[def defp defmacro defmacrop]a do
+    { args, _} = expand_all(args, env)
+    inner_env = add_function(env, name, args)
+    { body, _ } = expand_all(body, inner_env)
+    { {kind, meta, [{name, smeta, args}, body]}, env }
+  end
+
+  defp expand_all(ast, env) do
     case Macro.expand(ast, env) do
       # Imports, aliases, requires and other stuff which changes env
       {:__aliases__, _, _} = aliased ->
@@ -454,7 +468,7 @@ defmodule Tria.Compiler.ElixirTranslator do
 
 
           false ->
-            IO.inspect literal, pretty: true, label: :not_implemented
+            Debug.inspect literal, pretty: true, label: :not_implemented
             raise "Not implemented"
         end
     end
@@ -718,6 +732,19 @@ defmodule Tria.Compiler.ElixirTranslator do
   end
 
   # Macro.Env helpers
+
+  defp add_module(%Macro.Env{module: current_module} = env, aliased) do
+    module = unalias(aliased, env)
+    %Macro.Env{env | module: Module.concat(current_module, module)}
+  end
+
+  defp add_function(%Macro.Env{function: nil} = env, name, args) when is_list(args) do
+    %Macro.Env{env | function: {name, length(args)}}
+  end
+
+  defp add_function(%Macro.Env{function: nil} = env, name, atom) when is_atom(atom) do
+    %Macro.Env{env | function: {name, 0}}
+  end
 
   defp add_require(%Macro.Env{requires: requires} = env, module) do
     %Macro.Env{env | requires: [module | requires]}

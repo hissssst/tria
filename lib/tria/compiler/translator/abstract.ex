@@ -19,7 +19,12 @@ defmodule Tria.Compiler.AbstractTranslator do
   | {:env, Macro.Env.t()}
   | {:locals, [{atom(), arity()}]}
 
-  @spec to_tria(list(), [option()] | Macro.Env.t()) :: Tria.t()
+  @spec from_tria(Tria.t(), Keyword.t()) :: no_return()
+  def from_tria(_, _) do
+    raise "Not implemented"
+  end
+
+  @spec to_tria!(list(), [option()] | Macro.Env.t()) :: Tria.t()
   def to_tria!(abstract, opts \\ []) do
     {:ok, tria, _} = to_tria(abstract, opts)
     tria
@@ -92,7 +97,7 @@ defmodule Tria.Compiler.AbstractTranslator do
         meta = meta(anno)
 
         false_body = dot_call(:erlang, :error, [:if_clause], meta, meta)
-        clauses = [head_case | tail] = Enum.reverse traverse clauses
+        [head_case | tail] = Enum.reverse traverse clauses
         last_case = arrow_to_case(head_case, false_body)
 
         tail
@@ -328,9 +333,7 @@ defmodule Tria.Compiler.AbstractTranslator do
     end
   rescue
     e ->
-      if Debug.debugging?() do
-        IO.inspect(abstract, label: :failed_abstract, pretty: true, limit: :infinity)
-      end
+      Debug.inspect(abstract, label: :failed_abstract, pretty: true, limit: :infinity)
       reraise(e, __STACKTRACE__)
   end
 

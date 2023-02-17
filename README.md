@@ -27,8 +27,10 @@ def project do
 end
 ```
 
-3. `mix compile`
-There will be a ton of warnings. Just ignore them
+3. `mix compile && mix tria.warmup --available`
+This compiles the deps, and warms up the cache of used functions
+
+4. Project is ready to use now
 
 ## Features
 
@@ -36,14 +38,7 @@ There will be a ton of warnings. Just ignore them
 
 2. Enum fusion. Tria joins multiple consequent Enum or Stream calls to most optimal form.
 
-## How it works
-
-Compiler calls elixir's compiler which generates beam,
-with all compile-time stuff resolved. Compiler then
-exctracts abstract code (debug info) from modules and
-translates it to Tria. Tria is then optimized and then
-translated back to Elixir which is then compiled to beam
-for the last time
+3. `map.field` optimization. This construction is now 3 times faster
 
 ## How to debug
 

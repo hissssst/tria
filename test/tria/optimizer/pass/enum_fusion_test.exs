@@ -172,14 +172,14 @@ defmodule Tria.Optimizer.Pass.EnumFusionTest do
       tri do
         list
         |> Enum.map(fn x -> x + 1 end)
-        |> Enum.map(fn x -> x * 2 end)
+        |> Enum.map(fn x -> {x, 2} end)
       end
       |> run_while()
       |> unmeta()
       |> assert_tri do
         Enum.map(list, fn x1 ->
-          x2 = x1 + 1
-          x2 * 2
+          x2 = x + 1
+          {x2, 2}
         end)
       end
 
@@ -190,14 +190,14 @@ defmodule Tria.Optimizer.Pass.EnumFusionTest do
       tri do
         list
         |> Enum.map(fn x -> x + 1 end)
-        |> Enum.each(fn x -> x * 2 end)
+        |> Enum.each(fn x -> {x, 2} end)
       end
       |> run_while()
       |> unmeta()
       |> assert_tri do
         Enum.each(list, fn x1 ->
           x2 = x1 + 1
-          x2 * 2
+          {x2, 2}
         end)
       end
 
@@ -208,12 +208,12 @@ defmodule Tria.Optimizer.Pass.EnumFusionTest do
       tri do
         list
         |> Enum.flat_map(fn x -> [x + 1] end)
-        |> Enum.flat_map(fn x -> [x * 2] end)
+        |> Enum.flat_map(fn x -> [{x, 2}] end)
       end
       |> run_while()
       |> unmeta()
       |> assert_tri do
-        Enum.flat_map(list, fn x -> Enum.flat_map([x + 1], fn y -> [y * 2] end) end)
+        Enum.flat_map(list, fn x -> Enum.flat_map([x + 1], fn y -> [{y, 2}] end) end)
       end
     end
 

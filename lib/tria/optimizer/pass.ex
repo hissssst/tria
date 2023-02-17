@@ -2,8 +2,8 @@ defmodule Tria.Optimizer.Pass do
 
   @moduledoc """
   A `Pass` is a module which optimization logic.
-  Most of the passes can be run several times and this module
-  decouples this logic
+  Most of the passes can be run several times and this module decouples this logic.
+  This module also implements timeout based optimization interruption
   """
 
   @type opts :: Keyword.t()

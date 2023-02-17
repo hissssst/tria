@@ -42,7 +42,8 @@ defmodule Tria.Compiler.Annotations do
   end
 
   @doc """
-  Puts a list of lists of annotations
+  Puts a list of lists of annotations into storages
+  This function configures annotations per function
   """
   @spec put_annotations([{Compiler.signature() | MFArity.mfarity(), t()}]) :: [error()]
   def put_annotations(annotations) do
