@@ -15,12 +15,16 @@ defmodule Tria.Compiler.ContextServer do
 
   alias Tria.Compiler
   alias Tria.Compiler.ElixirTranslator
+  alias Tria.Compiler.ElixirCompiler
   alias Tria.Debug
   alias Tria.Debug.Tracer
+  alias Tria.Language.Codebase
   alias Tria.Language.FunctionRepo
+  alias Tria.Language.Guard
   alias Tria.Language.Interpreter
   alias Tria.Language.MFArity
   alias Tria.Optimizer
+  alias Tria.Optimizer.Depmap
 
   @type t :: atom()
 
@@ -68,6 +72,19 @@ defmodule Tria.Compiler.ContextServer do
   end
 
   @doc """
+  Restores state of the context server from already existing context module
+  """
+  @spec restore(t(), Keyword.t()) :: :ok
+  def restore(context, opts \\ []) do
+    call(context, {:restore, opts})
+  end
+
+  @spec emit_difference(t(), Enumerable.t(), Enumerable.t(), Enumerable.t()) :: :ok
+  def emit_difference(context, new_modules, removed_modules, changed_modules) do
+    call(context, {:emit_difference, new_modules, removed_modules, changed_modules})
+  end
+
+  @doc """
   Starts context server or returns it's pid if it doesn't exist
   """
   @spec start(t()) :: pid()
@@ -91,6 +108,39 @@ defmodule Tria.Compiler.ContextServer do
     {:ok, state}
   end
 
+  def handle_call({:emit_difference, _new, removed, changed}, _from, %{definitions: definitions} = state) do
+    removed_changed = MapSet.union(removed, changed)
+    definitions =
+      definitions
+      |> Enum.reject(fn {{module, _, _}, _} -> module in removed_changed end)
+      |> Map.new()
+
+    {:reply, :ok, %{state | definitions: definitions}}
+  end
+
+  def handle_call({:restore, _opts}, _from, state) do
+    case Codebase.fetch_tria_functions(state.name) do
+      {:ok, definitions} ->
+        definitions =
+          Enum.reduce(definitions, %{}, fn {{_module, kind, name, arity}, clauses}, acc ->
+            {module, name} = Compiler.unfname(name)
+            Tracer.tag_ast({:fn, [], clauses}, key: {module, name, arity}, label: :restored)
+            clauses =
+              Enum.map(clauses, fn {:"->", _, [args_guards, body]} ->
+                {guards, args} = Guard.pop_guards(args_guards)
+                {args, guards, [do: body]}
+              end)
+
+            Map.put(acc, {module, name, arity}, {:optimized, kind, clauses})
+          end)
+
+        {:reply, :ok, %{state | definitions: definitions}}
+
+      other ->
+        {:reply, other, state}
+    end
+  end
+
   def handle_call({:evaluate, mfarity, args}, from, %{definitions: definitions} = state) do
     {kind, clauses} = Map.fetch!(definitions, mfarity)
     spawn fn ->
@@ -100,9 +150,9 @@ defmodule Tria.Compiler.ContextServer do
     {:noreply, state}
   end
 
-  def handle_call({:emit_definition, {{module, kind, name, arity}, clauses}}, _from, %{definitions: definition} = state) do
-    definition = Map.put(definition, {module, name, arity}, {kind, clauses})
-    {:reply, :ok, %{state | definitions: definition}}
+  def handle_call({:emit_definition, {{module, kind, name, arity}, clauses}}, _from, %{definitions: definitions} = state) do
+    definitions = Map.put(definitions, {module, name, arity}, {:unoptimized, kind, clauses})
+    {:reply, :ok, %{state | definitions: definitions}}
   end
 
   def handle_call({:ready, _module}, _from, state) do
@@ -146,17 +196,17 @@ defmodule Tria.Compiler.ContextServer do
       File.write!("tria_global_context.ex", ast_to_string(module))
     end
 
-    Compiler.compile_quoted(module, "#{state.name}.ex")
+    ElixirCompiler.compile_quoted(module, no_warn_undefined: :all, ignore_module_conflict: true, file: "#{state.name}.ex")
   end
 
   defp definitions_to_funcs(definitions) do
     definitions
-    |> Enum.map(fn {{module, name, arity}, {kind, clauses}} ->
+    |> Enum.map(fn {{module, name, arity}, {level, kind, clauses}} ->
       the_fn = Compiler.clauses_to_fn(clauses)
       FunctionRepo.insert({module, name, arity}, :tria, the_fn)
-      {{module, kind, name, arity}, the_fn}
+      {{module, kind, name, arity}, level, the_fn}
     end)
-    |> Enum.flat_map(fn {{module, kind, name, arity} = signature, the_fn} ->
+    |> Enum.flat_map(fn {{module, kind, name, arity} = signature, level, the_fn} ->
       fname = Compiler.fname(signature)
       mfarity = {module, name, arity}
 
@@ -164,15 +214,8 @@ defmodule Tria.Compiler.ContextServer do
         try do
           Tracer.with_local_trace(mfarity, fn ->
             the_fn
-            |> Tracer.tag_ast(label: :before_passes)
-            |> then(fn ast ->
-              if FunctionRepo.lookup(mfarity, :optimize, true) do
-                opts = FunctionRepo.lookup(mfarity, :optimizer_opts, [remove_unused: false])
-                Optimizer.run(ast, opts)
-              else
-                ast
-              end
-            end)
+            |> Tracer.tag_ast(label: :before_optimizing)
+            |> optimize(level, mfarity)
             |> contextify_local_calls(definitions)
             |> Tracer.tag_ast(label: :generating)
             |> Compiler.fn_to_clauses()
@@ -187,6 +230,20 @@ defmodule Tria.Compiler.ContextServer do
 
       create_definition(kind, fname, clauses)
     end)
+  end
+
+  defp optimize(ast, :optimized, _), do: ast
+  defp optimize(ast, :unoptimized, mfarity) do
+    if FunctionRepo.lookup(mfarity, :optimize, true) do
+      opts = FunctionRepo.lookup(mfarity, :optimizer_opts, remove_unused: false)
+      {ast, depmap} = Optimizer.run(ast, opts)
+      Debug.inspect depmap, label: :depmap
+      Depmap.reflect_to_graph(mfarity, depmap)
+
+      ast
+    else
+      ast
+    end
   end
 
   defp create_definition(kind, fname, clauses) when kind in ~w[defmacro defmacrop]a do
@@ -206,7 +263,7 @@ defmodule Tria.Compiler.ContextServer do
         arity = length(args)
         mfarity = {module, name, arity}
         case definitions do
-          %{^mfarity => {kind, _clauses}} -> {Compiler.fname({module, kind, name, arity}), callmeta, args}
+          %{^mfarity => {_, kind, _clauses}} -> {Compiler.fname({module, kind, name, arity}), callmeta, args}
           _ -> call
         end
 
@@ -222,7 +279,7 @@ defmodule Tria.Compiler.ContextServer do
   end
 
   defp define(kind, fname, args, guards, body) do
-    guard = Compiler.join_guards(guards)
+    guard = Guard.join_when(guards)
     quote do
       unquote(kind)(unquote(fname)(unquote_splicing args) when unquote(guard), unquote(body))
     end

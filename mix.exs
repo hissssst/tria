@@ -27,6 +27,7 @@ defmodule Tria.MixProject do
       licenses: ["GPL 3"],
       files: [
         "lib",
+
         "mix.exs",
         "README.md",
         "priv/pure.ets",
@@ -47,6 +48,8 @@ defmodule Tria.MixProject do
 
   defp deps do
     [
+      {:mix_tester, "~> 1.0", only: :test},
+
       {:ex_doc,   "~> 0.23.0", only: :docs, runtime: false},
       {:dialyxir, "~> 1.0.0",  only: :dev, runtime: false},
       {:credo,    "~> 1.1",    only: :dev, runtime: false},

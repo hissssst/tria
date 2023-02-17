@@ -19,6 +19,7 @@ defmodule Tria.Language do
     }
   end
 
+  alias Tria.Debug
   import Tria.Language.Binary
 
   # These special forms are variables, but they can be assigned to, only used
@@ -292,10 +293,10 @@ defmodule Tria.Language do
     ast
   rescue
     e ->
-      IO.puts "\n=== Failed to inspect AST ==="
-      IO.inspect opts, pretty: true, limit: :infinity, label: :failed_to_inspect_opts
-      IO.inspect ast, pretty: true, limit: :infinity, label: :failed_to_inspect
-      IO.puts "\n"
+      Debug.puts "\n=== Failed to inspect AST ==="
+      Debug.inspect opts, pretty: true, limit: :infinity, label: :failed_to_inspect_opts
+      Debug.inspect ast, pretty: true, limit: :infinity, label: :failed_to_inspect
+      Debug.puts "\n"
       reraise e, __STACKTRACE__
   end
 

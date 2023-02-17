@@ -6,7 +6,6 @@ defmodule Tria.Language.Analyzer.Safety do
   """
 
   import Tria.Language
-  import Tria.Language.MFArity, only: [is_mfarity: 3]
   alias Tria.Language.MFArity
   alias Tria.Language.Interpreter
   alias Tria.Language.Codebase

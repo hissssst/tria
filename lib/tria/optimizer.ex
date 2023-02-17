@@ -7,12 +7,13 @@ defmodule Tria.Optimizer do
   import Tria.Language, only: [inspect_ast: 2], warn: false
   alias Tria.Compiler.SSATranslator
   alias Tria.Debug.Tracer
+  alias Tria.Optimizer.Depmap
   alias Tria.Optimizer.Pass.{Evaluation, EnumFusion, Peephole}
 
   @doc """
   Runs optimizer pipeline on Tria AST
   """
-  @spec run(Macro.t(), Keyword.t()) :: Macro.t()
+  @spec run(Tria.t(), Keyword.t()) :: {Tria.t(), Depmap.t()}
   def run(quoted, opts \\ []) do
     quoted
     |> SSATranslator.from_tria!()
@@ -25,10 +26,14 @@ defmodule Tria.Optimizer do
   end
 
   defp run_while(ast, opts) do
-    ast
-    |> Evaluation.run_while(opts)
-    # |> EnumFusion.run_while(opts)
-    |> Peephole.run_while()
+    opts = Keyword.put(opts, :return_depmap, true)
+
+    {ast, evaluation_depmap}  = Evaluation.run_while(ast, opts)
+    {ast, enum_fusion_depmap} = EnumFusion.run_while(ast, opts)
+
+    depmap = Depmap.merge(evaluation_depmap, enum_fusion_depmap)
+
+    {Peephole.run_while(ast), depmap}
   end
 
 end

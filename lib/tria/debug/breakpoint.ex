@@ -22,9 +22,7 @@ defmodule Tria.Debug.Breakpoint do
   def do_handle_breakpoint(_opts, _env, stacktrace, variables) do
     formatted_vars =
       variables
-      |> Enum.map(fn {name, value} ->
-        "#{name} = #{do_inspect(value)}"
-      end)
+      |> Enum.map(fn {name, value} -> "#{name} = #{do_inspect(value)}" end)
       |> Enum.join("\n")
       |> format()
 

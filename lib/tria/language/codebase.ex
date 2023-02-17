@@ -19,6 +19,8 @@ defmodule Tria.Language.Codebase do
   @typedoc "Name for a chunk in beam lib"
   @type chunk :: atom() | charlist()
 
+  @type abstract_code :: list()
+
   # BEAM chunks
 
   @doc """
@@ -119,6 +121,51 @@ defmodule Tria.Language.Codebase do
     e ->
       MFArity.inspect(mfarity, label: :failed_abstract_translation_of)
       reraise e, __STACKTRACE__
+  end
+
+  @spec fetch_tria_functions(abstract_code()) :: {:ok, definitions :: list()} | :error
+  def fetch_tria_functions(abstract_code) when is_list(abstract_code) do
+    {module, exports} =
+      Enum.reduce(abstract_code, {nil, nil}, fn
+        {:attribute, _, :module, module}, {_, export} -> {module, export}
+        {:attribute, _, :export, export}, {module, _} -> {module, export}
+        _, acc -> acc
+      end)
+
+    definitions =
+      for {:function, _anno, name, arity, clauses} when name != :__info__ <- abstract_code do
+        clauses = AbstractTranslator.to_tria!(clauses, env: empty_env(module))
+        kind = if {name, arity} in exports, do: :def, else: :defp
+        {{module, kind, name, arity}, clauses}
+      end
+
+    {:ok, definitions}
+  end
+  def fetch_tria_functions(module_or_binary) do
+    with {:ok, abstract_code} <- fetch_abstract_code(module_or_binary) do
+      fetch_tria_functions(abstract_code)
+    end
+  end
+
+  @doc """
+  Lists mfarities of the passed module
+  """
+  @spec list_functions(abstract_code() | binary() | module()) :: [MFArity.mfarity()]
+  def list_functions(abstract_code) when is_list(abstract_code) do
+    module =
+      Enum.find_value(abstract_code, fn
+        {:attribute, _, :module, module} -> module
+        _ -> false
+      end)
+
+    for {:function, _anno, name, arity, _clauses} <- abstract_code do
+      {module, name, arity}
+    end
+  end
+  def list_functions(module_or_binary) do
+    with {:ok, ac} <- fetch_abstract_code(module_or_binary) do
+      list_functions(ac)
+    end
   end
 
   @doc """

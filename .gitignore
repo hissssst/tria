@@ -27,3 +27,6 @@ tria-*.tar
 
 # FunctionRepo table caches
 /priv/*_cache.ets
+
+# FunctionRepo table locks
+/priv/.*ets.lock

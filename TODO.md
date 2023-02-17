@@ -2,21 +2,25 @@
 
 > This is an unordered dump with features to be implemented
 
-[x] Tria annotations. Like
-```elixir
-@tria pure: true, safe: true
-def pure_inspect(x) do
-  IO.inspect(x)
-end
-```
+[?] `no_optimize` macro which ensures that optimizations are not called
+    Kinda done because it can be specified in `@tria` annotations
+
+[ ] Incremental compilation
+    [x] Tracing deps during optimizations
+    [x] Manifest with hashes of functions
+    [ ] Testing
+
+[ ] Fix cte bug when function is not found in runtime
+
+[ ] Proper `Compiler.fname`
+
+[ ] Delegated functions rewrite stacktrace
 
 [ ] Multiple contexts
 
 [ ] Parallel compilation
 
 [ ] A-Normal form (or any other normal form suitable for more useful evaluation)
-
-[ ] `no_optimize` macro which ensures that optimizations are not called
 
 [ ] `warmup` options like `--only`
 
@@ -29,6 +33,7 @@ if first argument is a list, and a second is a pure function
 [ ] Peephole
   [ ] `Map.get(something, something, default)`
   [ ] `try(do: pure)`
+  [ ] `if left === right do`
 
 [ ] Inlining
   [ ] Size measurement
@@ -40,10 +45,35 @@ Calls reordering for more predictive optimizations
 [ ] Case lifting
 Joins nested cases into one big case
 
-[ ] map.field
-Optimize this to unpack map in one place.
-Actually can be done with checking if there is a zero-arity function with such name in any module
-
 [ ] Determine order of optimizers
 
 [ ] Create an ability to plan optimizers, so the compilation won't take too much time
+
+[ ] EnumFusion to :lists
+
+[ ] EnumFusion loop unrolling
+
+[ ] check
+
+```elixir
+Enum.each(list, fn item ->
+  f(item, %{key: value})
+end)
+# vs
+map = %{key: value}
+Enum.each(list, fn item ->
+  f(item, map)
+end)
+```
+
+[x] Tria annotations. Like
+```elixir
+@tria pure: true, safe: true
+def pure_inspect(x) do
+  IO.inspect(x)
+end
+```
+
+[x] map.field
+Optimize this to unpack map in one place.
+Actually can be done with checking if there is a zero-arity function with such name in any module

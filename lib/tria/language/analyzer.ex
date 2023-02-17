@@ -5,33 +5,22 @@ defmodule Tria.Language.Analyzer do
   cheking functions purity or safety
   """
 
-  import Tria.Language
-  alias Tria.Language.Analyzer.Purity
-  alias Tria.Language.Analyzer.Safety
+  alias Tria.Language.Analyzer.{Purity, Safety}
 
   @doc """
-  This function should be used only for debugging purposes
+  Checks if ast doesn't produce any side-effects upon evaluation.
+  When `true`, this means that there are definitely no side-effects.
   """
-  def info(ast, _opts \\ []) do
-    cond do
-      quoted_literal?(ast) ->
-        :literal
-
-      vared_literal?(ast) ->
-        :vared
-
-      Purity.check_analyze(ast) ->
-        :pure
-
-      true ->
-        :impure
-    end
-  end
-
+  @spec is_pure(Tria.t()) :: boolean()
   def is_pure(ast) do
     Purity.check_analyze(ast)
   end
 
+  @doc """
+  Checks if ast can raise.
+  When `true`, this means that exception won't definitely be raised
+  """
+  @spec is_safe(Tria.t()) :: boolean()
   def is_safe(ast) do
     Safety.analyze(ast)
   end

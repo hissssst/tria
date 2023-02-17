@@ -503,4 +503,54 @@ defmodule Tria.Compiler.ElixirTranslatorTest do
     end
   end
 
+  describe "Whole module" do
+    test "One definition" do
+      quote do
+        defmodule XYZ do
+          def f(x) do
+            __ENV__
+          end
+        end
+      end
+      |> ElixirTranslator.to_tria!()
+      |> assert_tri do
+        defmodule _ do
+          def f(x) do
+            tri env
+          end
+        end
+      end
+
+      {_, _, attrs} = env
+      env = Map.new attrs
+      assert %{module: XYZ, function: {:f, 1}} = env
+    end
+
+    test "Nested module" do
+      quote do
+        defmodule XXX do
+          defmodule YYY do
+            def f do
+              __ENV__
+            end
+          end
+        end
+      end
+      |> ElixirTranslator.to_tria!()
+      |> assert_tri do
+        defmodule _ do
+          defmodule _ do
+            def f do
+              tri env
+            end
+          end
+        end
+      end
+
+      {_, _, attrs} = env
+      env = Map.new attrs
+      assert %{module: XXX.YYY, function: {:f, 0}} = env
+    end
+  end
+
 end

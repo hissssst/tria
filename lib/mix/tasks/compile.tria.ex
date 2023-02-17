@@ -6,14 +6,20 @@ defmodule Mix.Tasks.Compile.Tria do
 
   use Mix.Task.Compiler
 
+  alias Mix.Project
   alias Tria.Compiler
+  alias Tria.Compiler.Manifest
   alias Tria.Debug
   alias Tria.Debug.Tracer
 
   def run(_args) do
-    Mix.Project.get!() # Just to make sure that project exists
-    mix_config = Mix.Project.config()
-    Mix.Project.ensure_structure(mix_config)
+    Project.get!() # Just to make sure that project exists
+    mix_config = Project.config()
+    Project.ensure_structure(mix_config)
+    manifest_path =
+      mix_config
+      |> Project.manifest_path()
+      |> Path.join("tria.manifest")
 
     if truthy_string? System.get_env("TRIA_DEBUG", "false") do
       Debug.flag_debug()
@@ -26,7 +32,7 @@ defmodule Mix.Tasks.Compile.Tria do
       |> Enum.each(&Tracer.trace(&1, only: :all))
     end
 
-    root = Path.dirname Mix.Project.project_file()
+    root = Path.dirname Project.project_file()
 
     elixirc_paths =
       mix_config
@@ -34,7 +40,7 @@ defmodule Mix.Tasks.Compile.Tria do
       |> Enum.map(fn path -> Path.join(root, path) end)
 
     build_path = Path.join [
-      Mix.Project.build_path(mix_config),
+      Project.build_path(mix_config),
       "lib",
       to_string(mix_config[:project] || mix_config[:app]),
       "ebin"
@@ -42,20 +48,25 @@ defmodule Mix.Tasks.Compile.Tria do
 
     File.mkdir_p!(build_path)
 
-    compile(elixirc_paths, build_path)
+    compile(elixirc_paths, build_path, manifest_path)
   end
 
   # Basically the whole compilation pipeline
-  defp compile(elixirc_paths, build_path) do
-    elixirc_paths
-    |> find_all_files()
-    |> Compiler.compile(build_path: build_path, context: TriaGlobalContext)
-    |> write_to_disk(build_path)
+  defp compile(elixirc_paths, build_path, manifest_path) do
+    manifest = read_manifest(manifest_path)
+
+    {manifest, modules} =
+      elixirc_paths
+      |> find_all_files()
+      |> Compiler.compile(manifest: manifest, build_path: build_path, context: TriaGlobalContext)
+
+    save_manifest(manifest_path, manifest)
+    write_to_disk(modules, build_path)
   end
 
   defp write_to_disk(modules, build_path) do
     Enum.each(modules, fn {module, binary} ->
-      Compiler.save(build_path, module, binary)
+      save(build_path, module, binary)
     end)
   end
 
@@ -83,8 +94,43 @@ defmodule Mix.Tasks.Compile.Tria do
 
   defp truthy_string?(string) do
     import String
+
     string = trim downcase string
     string in ~w[true 1 yes y]
+  end
+
+  defp read_manifest(manifest_path) do
+    case File.read(manifest_path) do
+      {:ok, data} ->
+        %Manifest{} = :erlang.binary_to_term(data)
+
+      _ ->
+        %Manifest{}
+    end
+  end
+
+  defp save_manifest(manifest_path, %Manifest{} = manifest) do
+    manifest_path
+    |> Path.dirname()
+    |> File.mkdir_p!()
+
+    Debug.inspect(manifest, label: :manifest)
+
+    File.write!(manifest_path, :erlang.term_to_binary(manifest))
+  end
+
+  defp save(build_path, module, binary) do
+    filename = Path.join(build_path, "#{module}.beam")
+    File.write!(filename, binary)
+
+    [
+      ignore_module_conflict: true
+    ]
+    |> Tria.Compiler.ElixirCompiler.with_compiler_options(fn ->
+      :code.add_path to_charlist Path.dirname filename
+      :code.purge module
+      :code.load_file module
+    end)
   end
 
 end

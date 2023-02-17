@@ -2,24 +2,24 @@ defmodule Tria.Optimizer.Pass.Evaluation do
 
   @moduledoc """
   This pass tries to evaluate everything what
-  can be preevaluated. This pass also removes
-  unused variables and unused calls
+  can be preevaluated, propagates variables,
+  removes unused calls and unused variables.
   """
 
   use Tria.Optimizer.Pass
   import Tria.Language
   import Tria.Language.Analyzer, only: [is_pure: 1, is_safe: 1]
   import Tria.Language.Binary, only: [traverse_specifier: 3]
-  import Tria.Language.MFArity, only: :macros
   import Tria.Language.Guard
   import Tria.Language.Meta
   import Tria.Language.Tri
   alias Tria.Compiler.SSATranslator
+  alias Tria.Debug
   alias Tria.Debug.Tracer
   alias Tria.Language.Analyzer.Purity
   alias Tria.Language.Bindmap
   alias Tria.Language.Interpreter
-  alias Tria.Language.MFArity
+  alias Tria.Optimizer.Depmap
 
   defstruct [
     # Runtime variable which is passed during traversal.
@@ -28,16 +28,14 @@ defmodule Tria.Optimizer.Pass.Evaluation do
 
     # Results of the evaluation are stored here
     hit: false,              # Marks if anything was changed during run
-    evaluated: MapSet.new(), # Marks compile-time evaluated functions
-    safe_deps: MapSet.new(), # Marks functions whose safety this pass relies upon
-    pure_deps: MapSet.new()  # Marks functions whose purity this pass relies upon
+    depmap: %Depmap{}        # Dependencies
   ]
 
   @type state :: %__MODULE__{
     bindings: Bindmap.t(),
     hit: boolean(),
     used: map(),
-    evaluated: MapSet.t()
+    depmap: Depmap.t()
   }
 
   @typedoc """
@@ -47,6 +45,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   `:inspect_iteration` -- only for `run_while`, whether to inspect ast on every iteration (default: `false`).
   Useful for debugging, accepts boolean or label atom
   `:state` -- allows to define state of evaluation
+  `:return_depmap` -- allows to specify whether to return the depmap alongside the resulting AST
   """
   @type option :: {:remove_unused, boolean()}
   | {:inspect_iteration, atom()}
@@ -54,22 +53,26 @@ defmodule Tria.Optimizer.Pass.Evaluation do
 
   ## Pass callbacks
 
-  def begin(ast, _opts) do
-    {:ok, ast}
+  def begin(ast, opts) do
+    state = Keyword.get(opts, :state, %__MODULE__{})
+    {:ok, {ast, state}}
   end
 
-  def finish(ast, _opts) do
-    {:ok, ast}
+  def finish({ast, %__MODULE__{depmap: depmap}}, opts) do
+    if opts[:return_depmap] do
+      {:ok, {ast, depmap}}
+    else
+      {:ok, ast}
+    end
   end
 
   ## Public API
 
   @spec run_once(Tria.t(), [option()]) :: {:ok, Tria.t()} | {:error, :nothing_to_optimize}
-  def run_once(ssa_ast, opts \\ []) do
+  def run_once({ssa_ast, _state}, opts \\ []) do
     Tracer.tag_ast(ssa_ast, label: :evaluation_run_once)
 
-    state = opts_to_state(opts)
-    {result, state} = run(ssa_ast, state)
+    {result, state} = run(ssa_ast, %__MODULE__{})
     {result, state} =
       if Keyword.get(opts, :remove_unused, true) do
         result
@@ -81,7 +84,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
 
     case state do
       %{hit: false} -> {:error, :nothing_to_optimize}
-      _ -> {:ok, result}
+      state -> {:ok, {result, state}}
     end
   end
 
@@ -90,9 +93,6 @@ defmodule Tria.Optimizer.Pass.Evaluation do
     {result, _state} = run(ssa_ast, Keyword.get(opts, :state, %__MODULE__{}))
     result
   end
-
-  defp opts_to_state(state: %__MODULE__{} = state), do: state
-  defp opts_to_state(_opts), do: %__MODULE__{}
 
   ## Runner helper
 
@@ -123,7 +123,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
               { {:=, meta, [new_left, new_right]}, put_bind(state, new_left, new_right) }
 
             {_yes_or_maybe, binds} ->
-              state = hit Enum.reduce(binds, state, fn {key, value}, state -> put_bind(state, key, value) end)
+              state = Enum.reduce(binds, state, fn {key, value}, state -> put_bind(state, key, value) end)
               { {:=, meta, [left, right]}, state }
 
             :no ->
@@ -177,7 +177,11 @@ defmodule Tria.Optimizer.Pass.Evaluation do
                       {other, acc}
                   end, nil)
 
-                state = hit put_safety(state, line)
+                state =
+                  state
+                  |> put_safety_and_purity(line)
+                  |> hit()
+
                 {:lists.reverse(binds), state}
 
               true ->
@@ -192,11 +196,18 @@ defmodule Tria.Optimizer.Pass.Evaluation do
         safe_and_pure = is_pure(body) and is_safe(body)
         cond do
           safe_and_pure and (other[:else] in [nil, []]) ->
-            state = hit put_safety(state, body)
+            state =
+              state
+              |> put_safety_and_purity(body)
+              |> hit()
+
             { body, state }
 
           safe_and_pure ->
-            state = hit put_safety(state, body)
+            state =
+              state
+              |> put_safety_and_purity(body)
+              |> hit()
             run({:case, meta, [body, [do: other[:else]]]}, state)
 
           true ->
@@ -379,8 +390,8 @@ defmodule Tria.Optimizer.Pass.Evaluation do
         if quoted_literal?(other) do
           { other, state }
         else
-          IO.inspect(other, label: :ast)
-          inspect_ast(other, label: :code)
+          Debug.inspect(other, label: :ast)
+          Debug.inspect_ast(other, label: :code)
           raise "Unexpected element"
         end
     end
@@ -434,8 +445,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
     end
   rescue
     e ->
-      {:case, [], [args, [do: clauses]]}
-      |> inspect_ast(label: :failed)
+      Debug.inspect_ast({:case, [], [args, [do: clauses]]}, label: :failed)
       reraise e, __STACKTRACE__
   end
 
@@ -595,7 +605,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
             state =
               new_state
               |> delete_used(variable)
-              |> put_safety(value)
+              |> put_safety_and_purity(value)
               |> hit()
 
             { value, state }
@@ -612,28 +622,6 @@ defmodule Tria.Optimizer.Pass.Evaluation do
 
   ## Helpers
 
-  ### Puts results of safety checks from AST into the state
-  defp put_safety(state, ast) do
-    put_trait(state, ast, :safe_deps, &is_safe/1)
-  end
-
-  defp put_purity(state, ast) do
-    put_trait(state, ast, :pure_deps, &is_pure/1)
-  end
-
-  defp put_trait(state, ast, key, check) do
-    ast
-    |> filterwalk(&is_dotcall/1)
-    |> Enum.reduce(state, fn dotcall, state ->
-      mfarity = MFArity.to_mfarity(dotcall)
-      if check.(MFArity.to_dotcall mfarity) do
-        Map.update!(state, key, &MapSet.put(&1, mfarity))
-      else
-        state
-      end
-    end)
-  end
-
   defp filter_clauses([{{:yes, _}, _} = last | _tail]) do
     [last]
   end
@@ -646,6 +634,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   defp equal?(left, right), do: unmeta(left) == unmeta(right)
 
   defp precompute(dot_call(module, function, args) = dc, state) when is_atom(module) and is_atom(function) do
+    Debug.inspect_ast(dc, label: :precomputation_candidate)
     args = Enum.map(args, fn arg -> unfold(arg, state) end)
     with(
       true <- Enum.all?(args, &quoted_literal?/1),
@@ -654,19 +643,19 @@ defmodule Tria.Optimizer.Pass.Evaluation do
       Tracer.tag_ast(dot_call(module, function, args), label: :precomputed_from)
       Tracer.tag(result, label: :precomputed_to)
       try do
+        # Escaping literals to Elixir's AST is safe
+        # since this AST will completely reflect Tria's implementation
         Macro.escape(result)
       rescue
         _ -> {dc, state}
       else
         result ->
-          state = Map.update!(state, :evaluated, &MapSet.put(&1, MFArity.to_mfarity(dc)))
+          state = put_evaluated(state, dc)
           case bindings do
             [] ->
-              state = put_evaluated(state, dc)
               {result, hit(state)}
 
             bindings ->
-              state = put_evaluated(state, dc)
               block = {:__block__, [], Enum.map(bindings, fn {key, value} -> tri(key = value) end) ++ [result]}
               {block, hit(state)}
           end
@@ -719,8 +708,13 @@ defmodule Tria.Optimizer.Pass.Evaluation do
     end
   end
 
-  defp put_evaluated(%{evaluated: evaluated} = state, call) do
-    %{state | evaluated: MapSet.put(evaluated, MFArity.to_mfarity(call))}
+  ### Puts results of safety checks from AST into the state
+  defp put_safety_and_purity(%{depmap: depmap} = state, ast) do
+    %{state | depmap: Depmap.put_many(depmap, ~w[safe pure]a, ast)}
+  end
+
+  defp put_evaluated(%{depmap: depmap} = state, call) do
+    %{state | depmap: Depmap.put(depmap, :evaluated, call)}
   end
 
   defp put_used(%{used: used} = state, key) do
@@ -758,13 +752,14 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   end
 
   defp left <~> right do
-    %{hit: left_hit, bindings: left_bindings, used: left_used}  = left
-    %{hit: right_hit, bindings: right_bindings, used: right_used} = right
+    %{hit: left_hit,  bindings: left_bindings,  used: left_used, depmap: left_depmap} = left
+    %{hit: right_hit, bindings: right_bindings, used: right_used, depmap: right_depmap} = right
 
-    used = Map.merge(left_used, right_used, fn _, l, r -> MapSet.union(l, r) end)
     bindings = Bindmap.merge!(left_bindings, right_bindings)
+    used = Map.merge(left_used, right_used, fn _, l, r -> MapSet.union(l, r) end)
+    depmap = Depmap.merge(left_depmap, right_depmap)
 
-    %{left | used: used, hit: left_hit or right_hit, bindings: bindings}
+    %{left | used: used, hit: left_hit or right_hit, bindings: bindings, depmap: depmap}
   end
 
 end
