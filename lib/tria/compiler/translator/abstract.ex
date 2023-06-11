@@ -12,7 +12,7 @@ defmodule Tria.Compiler.AbstractTranslator do
   import Tria.Language.Tri
   alias Tria.Debug
   alias Tria.Debug.Tracer
-  alias Tria.Language.Codebase
+  alias Tria.Language.Beam
   alias Tria.Compiler.SSATranslator
 
   @type option :: {:as_block, boolean()}
@@ -573,7 +573,13 @@ defmodule Tria.Compiler.AbstractTranslator do
   defp erlang_funcs do
     case Process.get(:erlang_funcs, nil) do
       nil ->
-        erlang_funcs = MapSet.new Codebase.fetch_functions :erlang
+        erlang_funcs =
+          :erlang
+          |> Beam.object_code!()
+          |> Beam.abstract_code!()
+          |> Beam.functions()
+          |> MapSet.new()
+
         Process.put(:erlang_funcs, erlang_funcs)
         erlang_funcs
 

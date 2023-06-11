@@ -54,7 +54,7 @@ defmodule Tria.TestHelpers do
       end)
 
     [{_, binary}] = Code.compile_quoted(quoted, __CALLER__.file)
-    {:ok, abstract_code} = Tria.Language.Codebase.fetch_abstract_code(binary)
+    {:ok, abstract_code} = Tria.Language.Beam.abstract_code(binary)
 
     Enum.find_value(abstract_code, fn
       {:function, _, :f, _, [{:clause, _, _, _, body}]} -> Macro.escape body

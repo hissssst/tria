@@ -77,6 +77,11 @@ defmodule Tria.Compiler.ElixirCompiler do
     at_lock(fn -> Code.ensure_compiled!(module) end)
   end
 
+  @spec ensure_loaded!(module :: module()) :: module :: module()
+  def ensure_loaded!(module) do
+    at_lock(fn -> Code.ensure_loaded!(module) end)
+  end
+
   @spec with_compiler_options(Keyword.t(), (() -> any())) :: any()
   def with_compiler_options([], func), do: at_lock(func)
   def with_compiler_options(options, func) do

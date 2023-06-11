@@ -12,7 +12,7 @@ defmodule Tria.Compiler.Manifest do
 
   #TODO store file to module relationship
 
-  alias Tria.Language.Codebase
+  alias Tria.Language.FunctionRepo
   alias Tria.Language.FunctionGraph
   alias Tria.Language.Meta
   alias Tria.Language.MFArity
@@ -59,7 +59,7 @@ defmodule Tria.Compiler.Manifest do
 
   @doc """
   Creates a manifest from files_to_modules relations and a list of
-  mfarities. These mfarities are hashed from Codebase and modules,
+  mfarities. These mfarities are hashed from Beam and modules,
   and files are hashed too
   """
   @spec format(file_to_modules(), [MFArity.mfarity()]) :: t()
@@ -169,7 +169,7 @@ defmodule Tria.Compiler.Manifest do
 
   @spec hash_function(MFArity.mfarity()) :: binary()
   def hash_function(mfarity) do
-    hash_ast Codebase.fetch_tria mfarity
+    hash_ast FunctionRepo.lookup(mfarity, :tria)
   end
 
   @spec hash_functions([MFArity.mfarity()]) :: %{MFArity.mfarity() => hash()}

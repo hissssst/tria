@@ -8,7 +8,7 @@ defmodule Tria.Language.Analyzer.Safety do
   import Tria.Language
   alias Tria.Language.MFArity
   alias Tria.Language.Interpreter
-  alias Tria.Language.Codebase
+  alias Tria.Language.Beam
   alias Tria.Language.FunctionRepo
 
   @doc """
@@ -89,7 +89,11 @@ defmodule Tria.Language.Analyzer.Safety do
       false <- mfarity in stack
     ) do
       result =
-        case Codebase.fetch_tria_bodies(mfarity) do
+        module
+        |> Beam.object_code!()
+        |> Beam.abstract_code!()
+        |> Beam.tria_bodies(mfarity)
+        |> case do
           nil ->
             false
 

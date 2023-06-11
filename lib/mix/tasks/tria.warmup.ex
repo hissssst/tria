@@ -28,7 +28,7 @@ defmodule Mix.Tasks.Tria.Warmup do
   @shortdoc "Warms up tria cache files"
 
   import Tria.Compiler.ElixirTranslator, only: [unalias: 1]
-  alias Tria.Language.Codebase
+  alias Tria.Language.Beam
   alias Tria.Language.Analyzer.Purity
 
   def run(args) when is_list(args) do
@@ -36,19 +36,30 @@ defmodule Mix.Tasks.Tria.Warmup do
   end
 
   def run(%{from: :loaded}) do
-    for {module, _} <- :code.all_loaded(), {function, arity} <- Codebase.fetch_functions(module) do
-      Purity.check_analyze_mfarity({module, function, arity})
-    end
+    :code.all_loaded()
+    |> Enum.each(fn module ->
+      module
+      |> Beam.object_code!()
+      |> Beam.abstract_code!()
+      |> Beam.functions()
+      |> Enum.each(fn {function, arity} ->
+        Purity.check_analyze_mfarity({module, function, arity})
+      end)
+    end)
   end
 
   def run(%{from: :available} = opts) do
     run(%{opts | from: :loaded})
     for {module, _file, false} <- :code.all_available() do
       module = :"#{module}"
-      # {:module, ^module} = :code.load_file(module)
-      for {function, arity} <- Codebase.fetch_functions(module) do
+
+      module
+      |> Beam.object_code!()
+      |> Beam.abstract_code!()
+      |> Beam.functions()
+      |> Enum.each(fn {function, arity} ->
         Purity.check_analyze_mfarity({module, function, arity})
-      end
+      end)
     end
   end
 

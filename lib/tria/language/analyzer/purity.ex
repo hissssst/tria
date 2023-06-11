@@ -15,7 +15,7 @@ defmodule Tria.Language.Analyzer.Purity do
   alias Tria.Debug.Tracer
   alias Tria.Language.MFArity
   alias Tria.Language.Interpreter
-  alias Tria.Language.{Codebase, FunctionRepo}
+  alias Tria.Language.{Beam, FunctionRepo}
   alias Tria.Language.Analyzer.Provider
 
   @type stack :: [{module(), atom(), non_neg_integer()}]
@@ -117,7 +117,11 @@ defmodule Tria.Language.Analyzer.Purity do
   defp lookup(mfargs, stack) when is_mfargs(mfargs) do
     {module, function, arity} = mfarity = MFArity.to_mfarity(mfargs)
     with nil <- do_lookup(mfarity, stack) do
-      case Codebase.fetch_tria_bodies mfarity do
+      module
+      |> Beam.object_code!()
+      |> Beam.abstract_code!()
+      |> Beam.tria_bodies(mfarity)
+      |> case do
         # No function found
         nil ->
           pure? = ask_provider(mfargs, stack)

@@ -8,7 +8,7 @@ defmodule Tria.Language.Analyzer.TTYProvider do
 
   import Tria.Language
   alias Tria.Language.Analyzer.Provider
-  alias Tria.Language.Codebase
+  alias Tria.Language.Beam
 
   @behaviour Provider
 
@@ -40,7 +40,7 @@ defmodule Tria.Language.Analyzer.TTYProvider do
     {:reply, result, state}
   end
 
-  defp ask(trait, mfa, %{stack: stack} = opts) do
+  defp ask(trait, {module, _, _} = mfa, %{stack: stack} = opts) do
     trait
     |> prompt(mfa, opts)
     |> IO.gets()
@@ -58,7 +58,11 @@ defmodule Tria.Language.Analyzer.TTYProvider do
         ask(trait, mfa, opts)
 
       "S" ->
-        inspect_ast Codebase.fetch_tria(mfa), label: :show
+        module
+        |> Beam.object_code!()
+        |> Beam.abstract_code!()
+        |> Beam.tria(mfa)
+        |> inspect_ast(label: :show)
         ask(trait, mfa, opts)
 
       _ ->

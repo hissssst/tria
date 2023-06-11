@@ -102,7 +102,7 @@ defmodule Tria.Compiler.AbstractTranslatorTest do
     end
 
     test "Funs not pinned" do
-      alias Tria.Language.Codebase
+      alias Tria.Language.Beam
 
       [{_, binary}] =
         quote do
@@ -116,8 +116,7 @@ defmodule Tria.Compiler.AbstractTranslatorTest do
         |> Code.compile_quoted("nofile")
 
       binary
-      |> Codebase.fetch_abstract_code()
-      |> elem(1)
+      |> Beam.abstract_code!()
       |> Enum.find_value(fn
         {:function, _, :f, 1, [{:clause, _, _, _, body}]} -> body
         _ -> false

@@ -45,7 +45,7 @@ defmodule Tria.Compiler do
   alias Tria.Debug
   alias Tria.Debug.Tracer
   alias Tria.Language.Binary
-  alias Tria.Language.Codebase
+  alias Tria.Language.Beam
   alias Tria.Language.FunctionRepo
   alias Tria.Language.FunctionGraph
 
@@ -106,12 +106,12 @@ defmodule Tria.Compiler do
       # ParallelCompiler options
       dest: build_path,
       each_module: fn file, module, bytecode ->
+        Beam.store_object_code(module, bytecode)
         send(caller, {:last_cycle_compiled, {module, bytecode, file}})
       end,
       each_cycle: fn graphs ->
-        last_cycle_compiled = compiled(:last_cycle_compiled)
         modules =
-          for {module, bytecode, file} <- last_cycle_compiled do
+          for {module, bytecode, file} <- compiled(:last_cycle_compiled) do
             send(caller, {:compiled, {module, bytecode, file}})
             module
           end
@@ -159,7 +159,6 @@ defmodule Tria.Compiler do
 
     modules =
       Enum.map(compiled, fn {module, bytecode, file} ->
-        ElixirCompiler.ensure_compiled!(module)
         recompile_from_beam(module, bytecode, Map.put(opts, :file, file))
       end)
 
@@ -203,7 +202,7 @@ defmodule Tria.Compiler do
   end
   def recompile_from_beam(module, binary, %{context: context, file: file}) do
     docs = fetch_docs(module, binary)
-    {:ok, ac} = Codebase.fetch_abstract_code(binary)
+    ac = Beam.abstract_code!(binary)
 
     %{
       export: public,
@@ -213,7 +212,7 @@ defmodule Tria.Compiler do
       typep: typep,
       opaque: opaque,
       spec: specs
-    } = Codebase.fetch_attributes(ac, ~w[callback export tria_acc type typep opaque spec]a)
+    } = Beam.attributes(ac, ~w[callback export tria_acc type typep opaque spec]a)
 
     public = Enum.concat(public)
 
@@ -275,7 +274,7 @@ defmodule Tria.Compiler do
 
   defp fetch_docs(module, binary) do
     try do
-      {:ok, doc} = Codebase.fetch_chunk(binary, ~c"Docs")
+      {:ok, doc} = Beam.chunk(binary, ~c"Docs")
       :erlang.binary_to_term(doc)
     rescue
       ArgumentError ->

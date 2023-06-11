@@ -30,7 +30,6 @@ defmodule Tria.Compiler.ElixirTranslator do
   import Tria.Language.Meta
 
   alias Tria.Debug
-  alias Tria.Language.Codebase
   alias Tria.Language.Guard
 
   @tri_opts [to_tria: false]
@@ -827,7 +826,7 @@ defmodule Tria.Compiler.ElixirTranslator do
   defp defines?(module, function, arity) do
 
     if Code.ensure_loaded?(module) do
-      function_exported?(module, function, arity) or !!Codebase.fetch_abstract({module, function, arity})
+      function_exported?(module, function, arity)
     else
       Enum.any?(~w[def defp defmacro defmacrop]a, &Module.defines?(module, {function, arity}, &1))
     end

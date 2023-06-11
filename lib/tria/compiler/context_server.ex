@@ -18,7 +18,7 @@ defmodule Tria.Compiler.ContextServer do
   alias Tria.Compiler.ElixirCompiler
   alias Tria.Debug
   alias Tria.Debug.Tracer
-  alias Tria.Language.Codebase
+  alias Tria.Language.Beam
   alias Tria.Language.FunctionRepo
   alias Tria.Language.Guard
   alias Tria.Language.Interpreter
@@ -79,7 +79,7 @@ defmodule Tria.Compiler.ContextServer do
     call(context, {:restore, opts})
   end
 
-  @spec emit_difference(t(), Enumerable.t(), Enumerable.t(), Enumerable.t()) :: :ok
+  @spec emit_difference(t(), Enumerable.t(module()), Enumerable.t(module()), Enumerable.t(module())) :: :ok
   def emit_difference(context, new_modules, removed_modules, changed_modules) do
     call(context, {:emit_difference, new_modules, removed_modules, changed_modules})
   end
@@ -119,10 +119,13 @@ defmodule Tria.Compiler.ContextServer do
   end
 
   def handle_call({:restore, _opts}, _from, state) do
-    case Codebase.fetch_tria_functions(state.name) do
-      {:ok, definitions} ->
+    case Beam.object_code(state.name) do
+      {:ok, object_code} ->
         definitions =
-          Enum.reduce(definitions, %{}, fn {{_module, kind, name, arity}, clauses}, acc ->
+          object_code
+          |> Beam.abstract_code!()
+          |> Beam.tria_functions()
+          |> Enum.reduce(%{}, fn {{_module, kind, name, arity}, clauses}, acc ->
             {module, name} = Compiler.unfname(name)
             Tracer.tag_ast({:fn, [], clauses}, key: {module, name, arity}, label: :restored)
             clauses =
@@ -237,7 +240,7 @@ defmodule Tria.Compiler.ContextServer do
     if FunctionRepo.lookup(mfarity, :optimize, true) do
       opts = FunctionRepo.lookup(mfarity, :optimizer_opts, remove_unused: false)
       {ast, depmap} = Optimizer.run(ast, opts)
-      Debug.inspect depmap, label: :depmap
+      Debug.inspect(depmap, label: :depmap)
       Depmap.reflect_to_graph(mfarity, depmap)
 
       ast
