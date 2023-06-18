@@ -41,19 +41,13 @@ defmodule Tria.Optimizer.Pass.Peephole do
           case Keyword.get(opts, :undot, :safe) do
             :force ->
               Tracer.tag_ast(ast, label: :hits_peephole_dot)
-              tri to_ssa: true do
-                %{key => value} = input
-                value
-              end
+              tri :erlang.map_get(key, input)
 
             :safe ->
-              case FunctionRepo.exists_any?([:defined, :pure_cache, :pure], function: key, arity: 0) do
+              case FunctionRepo.exists_any?([:defined, :pure_cache, :pure, :callback], function: key, arity: 0) do
                 false ->
                   Tracer.tag_ast(ast, label: :hits_peephole_dot)
-                  tri to_ssa: true do
-                    %{key => value} = input
-                    value
-                  end
+                  tri :erlang.map_get(key, input)
 
                 _ ->
                   ast

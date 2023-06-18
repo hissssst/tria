@@ -582,7 +582,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
   ## Removing unused
 
   def run_remove_unused(ast, state) do
-    #TODO improve
+    #TODO improve performance
     context_prewalk(
       ast,
       state,
@@ -665,7 +665,6 @@ defmodule Tria.Optimizer.Pass.Evaluation do
     end
   end
 
-  #TODO rename to something more meaningful
   defp tuplify([arg]), do: arg
   defp tuplify([left, right]), do: {left, right}
   defp tuplify(args) when is_list(args), do: {:{}, [], args}

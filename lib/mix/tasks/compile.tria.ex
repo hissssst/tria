@@ -12,7 +12,16 @@ defmodule Mix.Tasks.Compile.Tria do
   alias Tria.Debug
   alias Tria.Debug.Tracer
 
-  def run(_args) do
+  defmodule Options do
+    # Internal representation `mix compile.tria` command
+    @moduledoc false
+    defstruct [force: false]
+    def parse(["--force" | tail]), do: %__MODULE__{parse(tail) | force: true}
+    def parse(_), do: %__MODULE__{}
+  end
+
+  def run(args) do
+    options = Options.parse(args)
     Project.get!() # Just to make sure that project exists
     mix_config = Project.config()
     Project.ensure_structure(mix_config)
@@ -48,12 +57,16 @@ defmodule Mix.Tasks.Compile.Tria do
 
     File.mkdir_p!(build_path)
 
-    compile(elixirc_paths, build_path, manifest_path)
+    compile(elixirc_paths, build_path, manifest_path, options)
   end
 
-  # Basically the whole compilation pipeline
-  defp compile(elixirc_paths, build_path, manifest_path) do
-    manifest = read_manifest(manifest_path)
+  defp compile(elixirc_paths, build_path, manifest_path, %Options{} = options) do
+    manifest =
+      if options.force do
+        %Manifest{}
+      else
+        read_manifest(manifest_path)
+      end
 
     {manifest, modules} =
       elixirc_paths

@@ -6,6 +6,7 @@ defmodule Tria.Language.Analyzer do
   """
 
   alias Tria.Language.Analyzer.{Purity, Safety}
+  alias Tria.Language.Beam
 
   @doc """
   Checks if ast doesn't produce any side-effects upon evaluation.
@@ -23,6 +24,21 @@ defmodule Tria.Language.Analyzer do
   @spec is_safe(Tria.t()) :: boolean()
   def is_safe(ast) do
     Safety.analyze(ast)
+  end
+
+  # Helper function for analyzers
+  @doc false
+  @spec tria_bodies(Tria.Language.MFArity.t()) :: [Tria.t()] | nil
+  def tria_bodies({module, _, _} = mfarity) do
+    case Beam.object_code(module) do
+      {:ok, object_code} ->
+        object_code
+        |> Beam.abstract_code!()
+        |> Beam.tria_bodies(mfarity)
+
+      :error ->
+        nil
+    end
   end
 
 end

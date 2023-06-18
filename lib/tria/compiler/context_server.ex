@@ -119,7 +119,8 @@ defmodule Tria.Compiler.ContextServer do
   end
 
   def handle_call({:restore, _opts}, _from, state) do
-    case Beam.object_code(state.name) do
+    context = state.name
+    case Beam.object_code(context) do
       {:ok, object_code} ->
         definitions =
           object_code
@@ -130,6 +131,12 @@ defmodule Tria.Compiler.ContextServer do
             Tracer.tag_ast({:fn, [], clauses}, key: {module, name, arity}, label: :restored)
             clauses =
               Enum.map(clauses, fn {:"->", _, [args_guards, body]} ->
+                body =
+                  prewalk(body, fn
+                    dot_call(^context, function, args, _, callmeta) -> {function, callmeta, args}
+                    other -> other
+                  end)
+
                 {guards, args} = Guard.pop_guards(args_guards)
                 {args, guards, [do: body]}
               end)

@@ -10,8 +10,6 @@ defmodule Tria.Compiler.Manifest do
   # Recompile when any dependency of optimizer changes
   #   When dependency is internal, recompile it too
 
-  #TODO store file to module relationship
-
   alias Tria.Language.FunctionRepo
   alias Tria.Language.FunctionGraph
   alias Tria.Language.Meta
@@ -19,7 +17,10 @@ defmodule Tria.Compiler.Manifest do
 
   import :erlang, only: [term_to_binary: 1, md5: 1]
 
+  @tria_version Tria.MixProject.project[:version]
+
   defstruct [
+    tria_version: @tria_version,
     file_inputs: %{},
     file_to_modules: %{},
     function_inputs: %{},

@@ -19,8 +19,7 @@ defmodule Tria.Optimizer.Pass.PeepholeTest do
       end
       |> run_while()
       |> assert_tri do
-        %{just_some_map_field: x} = map
-        x
+        :erlang.map_get(:just_some_map_field, map)
       end
     end
 

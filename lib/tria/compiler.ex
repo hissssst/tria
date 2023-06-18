@@ -214,6 +214,10 @@ defmodule Tria.Compiler do
       spec: specs
     } = Beam.attributes(ac, ~w[callback export tria_acc type typep opaque spec]a)
 
+    for {{name, arity}, _} <- callbacks do
+      FunctionRepo.insert({module, name, arity}, :callback, true)
+    end
+
     public = Enum.concat(public)
 
     types = prepare_types(type, typep, opaque)

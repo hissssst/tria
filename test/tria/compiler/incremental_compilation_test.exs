@@ -183,4 +183,33 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
 
     assert {_, 0} = MixTester.mix_cmd(project, "test")
   end
+
+  test "private calls handled correctly", %{project: project} do
+    write_ast(project, "lib/x.ex", quote do
+      defmodule X do
+        def f(x), do: 100 + g(x)
+
+        defp g(x), do: x
+      end
+    end)
+
+    write_ast(project, "test/subject/x_test.exs", quote do
+      defmodule XTest do
+        use ExUnit.Case, async: true
+        test "X.f(1)" do
+          assert X.f(1) == 100 + 1
+        end
+      end
+    end)
+
+    assert {_, 0} = MixTester.mix_cmd(project, "test")
+
+    write_ast(project, "lib/y.ex", quote do
+      defmodule Y do
+        def g(x), do: x
+      end
+    end)
+
+    assert {_, 0} = MixTester.mix_cmd(project, "test")
+  end
 end

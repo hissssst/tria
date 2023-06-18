@@ -24,7 +24,7 @@ defmodule Tria.TestHelpers do
       code
       |> Tri.do_tri(opts, %{__CALLER__ | context: :match})
       |> prewalk(fn
-        #FIXME https://github.com/elixir-lang/elixir/issues/12296
+        #https://github.com/elixir-lang/elixir/issues/12296
         {:{}, _, [:__block__, _, [line]]} -> line
         {:{}, _, [:__aliases__, _, modules]} -> Module.concat(modules)
         other -> other

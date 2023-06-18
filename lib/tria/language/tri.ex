@@ -18,10 +18,11 @@ defmodule Tria.Language.Tri do
   @typedoc """
   Options for `tri/2` macro
 
-  `:debug` - defines label in case you want to inspect the AST (default: `false`)
-  `:to_tria` - translates the pattern to Tria (default: `true`)
-  `:isolate` - defines that the variables should not be fetches from outer context (default: `false`)
-  `:meta` - whether meta field should be empty in pattern or in AST
+  - `:debug` — defines label in case you want to inspect the AST (default: `false`)
+  - `:to_tria` — translates the pattern to Tria (default: `true`)
+  - `:to_ssa` — translates the pattern to SSA form (default: `false`)
+  - `:isolate` — defines that the variables should not be fetches from outer context (default: `false`)
+  - `:meta` — whether meta field should be empty in pattern or in AST
   """
   @type option :: {:debug, atom()}
   | {:to_tria, :force | true | false}

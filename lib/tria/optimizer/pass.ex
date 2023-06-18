@@ -14,10 +14,19 @@ defmodule Tria.Optimizer.Pass do
 
   @type t :: module()
 
+  @doc """
+  Initializes the state of the optimizing pass
+  """
   @callback begin(Tria.t(), opts()) :: {:ok, state()} | {:error, reason}
 
+  @doc """
+  Runs the pass once with the specified state and options
+  """
   @callback run_once(state(), opts()) :: {:ok, state()} | {:error, reason()}
 
+  @doc """
+  Completes the pass
+  """
   @callback finish(state(), opts()) :: {:ok, Tria.t()} | {:error, reason()}
 
   @optional_callbacks [begin: 2, finish: 2]

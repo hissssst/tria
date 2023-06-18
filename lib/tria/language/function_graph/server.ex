@@ -1,5 +1,8 @@
 defmodule Tria.Language.FunctionGraph.Server do
-  # Server for managing existing graphs
+  @moduledoc """
+  Server for managing existing graphs and their ets tables
+  """
+
   use GenServer
 
   alias Tria.Language.FunctionGraph

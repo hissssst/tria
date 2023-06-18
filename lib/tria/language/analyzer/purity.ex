@@ -13,10 +13,11 @@ defmodule Tria.Language.Analyzer.Purity do
   import Tria.Language.MFArity, only: :macros
 
   alias Tria.Debug.Tracer
-  alias Tria.Language.MFArity
-  alias Tria.Language.Interpreter
-  alias Tria.Language.{Beam, FunctionRepo}
+  alias Tria.Language.Analyzer
   alias Tria.Language.Analyzer.Provider
+  alias Tria.Language.FunctionRepo
+  alias Tria.Language.Interpreter
+  alias Tria.Language.MFArity
 
   @type stack :: [{module(), atom(), non_neg_integer()}]
 
@@ -117,11 +118,7 @@ defmodule Tria.Language.Analyzer.Purity do
   defp lookup(mfargs, stack) when is_mfargs(mfargs) do
     {module, function, arity} = mfarity = MFArity.to_mfarity(mfargs)
     with nil <- do_lookup(mfarity, stack) do
-      module
-      |> Beam.object_code!()
-      |> Beam.abstract_code!()
-      |> Beam.tria_bodies(mfarity)
-      |> case do
+      case Analyzer.tria_bodies(mfarity) do
         # No function found
         nil ->
           pure? = ask_provider(mfargs, stack)

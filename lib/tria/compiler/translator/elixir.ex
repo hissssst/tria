@@ -682,7 +682,7 @@ defmodule Tria.Compiler.ElixirTranslator do
       other, env ->
         #FIXME not sure about this, needs testing
         # I mean, I am not sure that env inheritance works this way
-        # inside `with`. But who the **** knows, right?
+        # inside `with`.
         expand_all(other, env)
     end)
   end
@@ -843,7 +843,7 @@ defmodule Tria.Compiler.ElixirTranslator do
       {file, line} ->
         meta
         |> Keyword.put(:line, line)
-        |> Keyword.put(:file, Path.relative_to_cwd file)
+        |> Keyword.put(:file, file)
 
       _ ->
         case meta[:line] do
