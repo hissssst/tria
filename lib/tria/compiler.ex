@@ -106,6 +106,7 @@ defmodule Tria.Compiler do
       # ParallelCompiler options
       dest: build_path,
       each_module: fn file, module, bytecode ->
+        Debug.inspect(module, label: :each_module)
         Beam.store_object_code(module, bytecode)
         send(caller, {:last_cycle_compiled, {module, bytecode, file}})
       end,

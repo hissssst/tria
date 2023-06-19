@@ -37,30 +37,36 @@ defmodule Mix.Tasks.Tria.Warmup do
 
   def run(%{from: :loaded}) do
     :code.all_loaded()
-    |> Enum.each(fn module ->
-      module
-      |> Beam.object_code!()
-      |> Beam.abstract_code!()
-      |> Beam.functions()
-      |> Enum.each(fn {function, arity} ->
-        Purity.check_analyze_mfarity({module, function, arity})
-      end)
-    end)
+    |> Enum.map(fn {module, _filename} -> module end)
+    |> check()
   end
 
-  def run(%{from: :available} = opts) do
-    run(%{opts | from: :loaded})
-    for {module, _file, false} <- :code.all_available() do
-      module = :"#{module}"
+  def run(%{from: :available}) do
+    :code.all_available()
+    |> Enum.map(fn {module, _, _} -> :"#{module}" end)
+    |> check()
+  end
 
-      module
-      |> Beam.object_code!()
-      |> Beam.abstract_code!()
-      |> Beam.functions()
-      |> Enum.each(fn {function, arity} ->
-        Purity.check_analyze_mfarity({module, function, arity})
-      end)
-    end
+  def check(modules) do
+    length = length modules
+    modules
+    |> Stream.with_index(1)
+    |> Enum.each(fn {module, index} ->
+      with(
+        {:ok, object_code} <- Beam.object_code(module),
+        {:ok, abstract_code} <- Beam.abstract_code(object_code)
+      ) do
+        functions = Beam.functions(abstract_code)
+        flength = length(functions)
+
+        functions
+        |> Stream.with_index(1)
+        |> Enum.each(fn {{function, arity}, findex} ->
+          status(length, index, module, flength, findex)
+          Purity.check_analyze_mfarity({module, function, arity})
+        end)
+      end
+    end)
   end
 
   defp parse_args(args, opts \\ %{from: :loaded, set: nil})
@@ -81,5 +87,12 @@ defmodule Mix.Tasks.Tria.Warmup do
     parse_args(tail, %{opts | from: {unalias(aliased), function, arity}})
   end
   defp parse_args([], opts), do: opts
+
+  defp status(all_modules, current_module, module, all_functions, current_function) do
+    IO.write [
+      IO.ANSI.clear_line(),
+      "\r#{current_module}/#{all_modules} #{inspect module} #{current_function}/#{all_functions}"
+    ]
+  end
 
 end

@@ -35,7 +35,7 @@ defmodule Tria.Compiler.ElixirCompiler do
   @spec compile_quoted(Macro.t(), Keyword.t()) :: [{module(), binary()}]
   def compile_quoted(quoted, opts) do
     {file, opts} = Keyword.pop(opts, :file, "nofile")
-    {debug?, opts} = Keyword.pop(opts, :debug, Debug.debugging?())
+    {debug?, opts} = Keyword.pop(opts, :debug, Debug.debugging?(:compile_quoted))
 
     with_compiler_options(opts, fn ->
       try do

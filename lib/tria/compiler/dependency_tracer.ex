@@ -126,11 +126,11 @@ defmodule Tria.Compiler.DependencyTracer do
   end
 
   def trace({:struct_expansion, _meta, module, []}, env) do
-    link_to_current(:depends, {module, :__struct__, 0}, env)
+    link_to_current(:calls, {module, :__struct__, 0}, env)
   end
 
   def trace({:struct_expansion, _meta, module, _keys}, env) do
-    link_to_current(:depends, {module, :__struct__, 1}, env)
+    link_to_current(:calls, {module, :__struct__, 1}, env)
   end
 
   def trace({call, _, module, function, arity}, env) when call in ~w[imported_function remote_function]a do

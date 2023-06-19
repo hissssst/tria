@@ -7,22 +7,29 @@ defmodule Tria.Debug do
 
   import Kernel, except: [inspect: 1, inspect: 2]
 
-  @spec flag_debug(boolean()) :: boolean()
-  def flag_debug(flag \\ true) do
-    was = debugging?()
-    :persistent_term.put(:tria_debugging, flag)
-    was
+  @type tag :: atom()
+
+  @spec flag_debug([atom()] | :all) :: :ok
+  def flag_debug(tags \\ :all) do
+    :persistent_term.put(:tria_debugging, tags)
+    :ok
   end
 
-  @spec debugging?() :: boolean()
-  def debugging? do
-    :persistent_term.get(:tria_debugging, false)
+  @spec debugging?(tag) :: boolean()
+  def debugging?(nil) do
+    :all == :persistent_term.get(:tria_debugging, [])
+  end
+  def debugging?(tag) do
+    case :persistent_term.get(:tria_debugging, []) do
+      :all -> true
+      tags -> tag in tags
+    end
   end
 
   @spec inspect_ast(ast, Keyword.t()) :: ast
         when ast: Tria.t() | Macro.t()
   def inspect_ast(ast, opts \\ []) do
-    if debugging?() do
+    if debugging?(opts[:label]) do
       Tria.Language.inspect_ast(ast, opts)
     else
       ast
@@ -32,7 +39,7 @@ defmodule Tria.Debug do
   @spec inspect(value, Keyword.t()) :: value
                 when value: any()
   def inspect(value, opts \\ []) do
-    if debugging?() do
+    if debugging?(opts[:label]) do
       IO.inspect(value, opts)
     else
       value
@@ -41,7 +48,7 @@ defmodule Tria.Debug do
 
   @spec puts(String.t()) :: :ok
   def puts(string) do
-    if debugging?(), do: IO.puts(string)
+    if debugging?(nil), do: IO.puts(string)
     :ok
   end
 

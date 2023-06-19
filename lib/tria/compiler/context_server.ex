@@ -101,7 +101,7 @@ defmodule Tria.Compiler.ContextServer do
   def init(opts) do
     state = %{
       definitions: %{},
-      check_context_module: Debug.debugging?(),
+      check_context_module: Debug.debugging?(:context_module_check),
       name: Map.fetch!(opts, :name)
     }
 
@@ -202,7 +202,7 @@ defmodule Tria.Compiler.ContextServer do
         end
       end
 
-    if Debug.debugging?() do
+    if Debug.debugging?(:write_tria) do
       File.write!("tria_global_context.ex", ast_to_string(module))
     end
 
@@ -232,7 +232,7 @@ defmodule Tria.Compiler.ContextServer do
           end)
         rescue
           e ->
-            if Debug.debugging?() do
+            if Debug.debugging?(:failed_generation) do
               IO.puts "Failed generation for #{module}.#{name}/#{arity}"
             end
             reraise e, __STACKTRACE__

@@ -6,6 +6,7 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
   setup do
     project =
       MixTester.setup(name: :subject, project: [
+        consolidate_protocols: false,
         compilers: [:tria, :app],
         deps: [tria: [path: File.cwd!()]]
       ])
@@ -207,6 +208,54 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
     write_ast(project, "lib/y.ex", quote do
       defmodule Y do
         def g(x), do: x
+      end
+    end)
+
+    assert {_, 0} = MixTester.mix_cmd(project, "test")
+  end
+
+  test "string interpolation works correctly", %{project: project} do
+    write_ast(project, "lib/x.ex", quote do
+      defmodule X do
+        def f(x), do: "one #{x} three"
+        def g(x), do: "one #{x}"
+      end
+    end)
+
+    write_ast(project, "test/subject/x_test.exs", quote do
+      defmodule XTest do
+        use ExUnit.Case, async: true
+        test "X.f(2)" do
+          assert X.f(2) == "one 2 three"
+        end
+
+        test "X.g(2)" do
+          assert X.g(2) == "one 2"
+        end
+      end
+    end)
+
+    assert {_, 0} = MixTester.mix_cmd(project, "test")
+
+    write_ast(project, "lib/y.ex", quote do
+      defmodule Y do
+        defstruct [x: 1]
+        defimpl String.Chars do
+          def to_string(%{x: x}), do: Kernel.to_string(x)
+        end
+      end
+    end)
+
+    write_ast(project, "test/subject/y_test.exs", quote do
+      defmodule YTest do
+        use ExUnit.Case, async: true
+        test "X.f(%Y{x: 2})" do
+          assert X.f(%Y{x: 2}) == "one 2 three"
+        end
+
+        test "X.g(%Y{x: 2})" do
+          assert X.g(%Y{x: 2}) == "one 2"
+        end
       end
     end)
 

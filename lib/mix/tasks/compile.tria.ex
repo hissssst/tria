@@ -30,11 +30,21 @@ defmodule Mix.Tasks.Compile.Tria do
       |> Project.manifest_path()
       |> Path.join("tria.manifest")
 
-    if truthy_string? System.get_env("TRIA_DEBUG", "false") do
-      Debug.flag_debug()
+    case System.get_env("TRIA_DEBUG", "0") do
+      none when none in ["none", "0", ""] ->
+        :ok
+
+      all when all in ~w[all 1] ->
+        Debug.flag_debug()
+
+      tags ->
+        tags
+        |> String.split(",")
+        |> Enum.map(& String.to_atom String.trim &1)
+        |> Debug.flag_debug()
     end
 
-    if Debug.debugging?() do
+    if Debug.debugging?(:trace) do
       "TRIA_TRACE"
       |> System.get_env("")
       |> Tracer.parse_trace_env()
@@ -103,13 +113,6 @@ defmodule Mix.Tasks.Compile.Tria do
           []
       end
     end)
-  end
-
-  defp truthy_string?(string) do
-    import String
-
-    string = trim downcase string
-    string in ~w[true 1 yes y]
   end
 
   defp read_manifest(manifest_path) do
