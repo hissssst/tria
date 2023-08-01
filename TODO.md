@@ -66,6 +66,10 @@ Enum.each(list, fn item ->
 end)
 ```
 
+[ ] `optional_callbacks`
+
+[x] Module attributes are stored correctly
+
 [x] Tria annotations. Like
 ```elixir
 @tria pure: true, safe: true

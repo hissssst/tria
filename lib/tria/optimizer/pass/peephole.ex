@@ -50,12 +50,12 @@ defmodule Tria.Optimizer.Pass.Peephole do
                   tri :erlang.map_get(key, input)
 
                 _ ->
-                  ast
+                  no_parens ast
               end
 
 
             _ ->
-              ast
+              no_parens ast
           end
 
         other ->
@@ -100,6 +100,10 @@ defmodule Tria.Optimizer.Pass.Peephole do
       :timeout -> {result, :stop}
       after 0 -> {result, :run}
     end
+  end
+
+  defp no_parens({name, meta, args}) do
+    {name, [{:no_parens, true} | meta], args}
   end
 
 end

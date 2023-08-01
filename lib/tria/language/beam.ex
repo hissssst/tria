@@ -14,6 +14,7 @@ defmodule Tria.Language.Beam do
   import Tria.Language
   import Tria.Language.MFArity, only: [is_mfarity: 3]
 
+  alias Tria.Debug
   alias Tria.Language.MFArity
   alias Tria.Compiler.AbstractTranslator
 
@@ -26,6 +27,17 @@ defmodule Tria.Language.Beam do
 
   # BEAM chunks
 
+  @doc """
+  Extracts module from BEAM's object_code
+  """
+  @spec module(object_code()) :: atom()
+  def module(object_code) do
+    :beam_lib.info(object_code)[:module]
+  end
+
+  @doc """
+  Stores BEAM in ETS
+  """
   @spec store_object_code(module(), object_code()) :: :ok
   def store_object_code(module, object_code) do
     storage = ensure_storage()
@@ -133,7 +145,24 @@ defmodule Tria.Language.Beam do
     end
   end
 
-  @spec attribute(abstract_code(), [atom()]) :: %{atom() => any()}
+  @doc """
+  Lists all attributes in the module
+  """
+  @spec attributes(abstract_code()) :: %{atom() => [any()]}
+  def attributes(abstract_code) do
+    Enum.reduce(abstract_code, %{}, fn
+      {:attribute, _, name, value}, acc ->
+        Map.update(acc, name, [value], &[value | &1])
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  @doc """
+  Lists specified attributes in the module
+  """
+  @spec attributes(abstract_code(), [atom()]) :: %{atom() => [any()]}
   def attributes(abstract_code, names) do
     acc = Map.new(names, fn name -> {name, []} end)
     Enum.reduce(abstract_code, acc, fn
@@ -263,6 +292,44 @@ defmodule Tria.Language.Beam do
     end
 
     :ok
+  end
+
+  @doc """
+  Extracts docs from BEAM's object_code. Prints debug information
+  """
+  @spec docs(object_code()) :: {String.t() | nil, %{{atom(), arity()} => String.t()}}
+  def docs(binary) do
+    {:ok, doc} = chunk(binary, ~c"Docs")
+    :erlang.binary_to_term(doc)
+  rescue
+    ArgumentError ->
+      module = module(binary)
+      Debug.puts "Non BERT docs format for #{module}, continuing without docs"
+      {nil, %{}}
+
+    MatchError ->
+      module = module(binary)
+      Debug.puts "Failed to fetch docs chunk for #{module}, continuing without docs"
+      {nil, %{}}
+  else
+    {:docs_v1, _, :elixir, "text/markdown", maybe_moduledoc, _, docs} ->
+      function_docs =
+        for {{k, name, arity}, _, _, %{"en" => doc}, _} when k in ~w[macro function]a <- docs, into: %{} do
+          {{name, arity}, doc}
+        end
+
+      moduledoc =
+        case maybe_moduledoc do
+          %{"en" => moduledoc} -> moduledoc
+          _ -> nil
+        end
+
+      {moduledoc, function_docs}
+
+    docs ->
+      module = module(binary)
+      Debug.puts "Unexpected docs format for #{module}, #{inspect docs}, continuing without docs"
+      {nil, %{}}
   end
 
   @spec ensure_storage() :: :ets.tid()

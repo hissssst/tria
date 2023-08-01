@@ -202,29 +202,43 @@ defmodule Tria.Compiler do
     recompile_from_beam(module, binary, Map.new(opts))
   end
   def recompile_from_beam(module, binary, %{context: context, file: file}) do
-    docs = fetch_docs(module, binary)
+    {moduledoc, docs} = Beam.docs(binary)
     ac = Beam.abstract_code!(binary)
 
-    %{
-      export: public,
-      tria_acc: annotations,
-      callback: callbacks,
-      type: type,
-      typep: typep,
-      opaque: opaque,
-      spec: specs
-    } = Beam.attributes(ac, ~w[callback export tria_acc type typep opaque spec]a)
-
+    attributes = Beam.attributes(ac)
+    public = Map.get(attributes, :export, [])
+    annotations = Map.get(attributes, :tria_acc, [])
+    types = prepare_types(
+      Map.get(attributes, :type, []),
+      Map.get(attributes, :typep, []),
+      Map.get(attributes, :opaque, [])
+    )
+    specs = prepare_specs(Map.get(attributes, :spec, []))
+    callbacks = Map.get(attributes, :callback, [])
     for {{name, arity}, _} <- callbacks do
       FunctionRepo.insert({module, name, arity}, :callback, true)
     end
-
-    public = Enum.concat(public)
-
-    types = prepare_types(type, typep, opaque)
-    specs = prepare_specs(specs)
     callbacks = prepare_callbacks(callbacks)
 
+    user_attributes =
+      attributes
+      |> Map.drop(~w[
+        callback
+        compile
+        export
+        export_type
+        file
+        module
+        opaque
+        optional_callbacks
+        spec
+        tria_acc
+        type
+        typep
+      ]a)
+      |> Map.to_list()
+
+    public = Enum.concat(public)
     locals = for {:function, _anno, name, arity, _clauses} <- ac, do: {name, arity}
 
     annotations
@@ -267,7 +281,7 @@ defmodule Tria.Compiler do
 
     body =
       {:__block__, [], delegations}
-      |> prepend_attrs(callbacks ++ types)
+      |> prepend_attrs([moduledoc: List.wrap(moduledoc)] ++ user_attributes ++ callbacks ++ types)
       |> put_file(file)
 
     [{^module, binary}] =
@@ -275,30 +289,6 @@ defmodule Tria.Compiler do
       |> ElixirCompiler.compile_quoted(file: file, ignore_module_conflict: true, no_warn_undefined: :all)
 
     {module, binary}
-  end
-
-  defp fetch_docs(module, binary) do
-    try do
-      {:ok, doc} = Beam.chunk(binary, ~c"Docs")
-      :erlang.binary_to_term(doc)
-    rescue
-      ArgumentError ->
-        Debug.puts "Non BERT docs format for #{module}, continuing without docs"
-        %{}
-
-      MatchError ->
-        Debug.puts "Failed to fetch docs chunk for #{module}, continuing without docs"
-        %{}
-    else
-      {:docs_v1, _, :elixir, "text/markdown", _, _, docs} ->
-        for {{k, name, arity}, _, _, %{"en" => doc}, _} when k in ~w[macro function]a <- docs, into: %{} do
-          {{name, arity}, doc}
-        end
-
-      docs ->
-        Debug.puts "Unexpected docs format for #{module}, #{inspect docs}, continuing without docs"
-        %{}
-    end
   end
 
   defp remotify_local_calls(ast, module, locals) do
@@ -431,21 +421,40 @@ defmodule Tria.Compiler do
     |> Tracer.tag_ast(key: {module, name, arity}, label: :delegated)
   end
 
-  @spec prepend_attrs(Macro.t(), [{atom(), nil | Macro.t()}]) :: Macro.t()
+  @special_attributes ~w[spec callback type typep opaque doc]a
+  defguard is_special_attribute(name) when name in @special_attributes
+
+  @spec prepend_attrs(Macro.t(), [{atom(), nil | [Macro.t()]}]) :: Macro.t()
   defp prepend_attrs(quoted, []), do: quoted
-  defp prepend_attrs(quoted, [{_name, nil} | tail]) do
+  defp prepend_attrs(quoted, [{_name, none} | tail]) when none in [[], nil] do
     prepend_attrs(quoted, tail)
   end
-  defp prepend_attrs({:__block__, _, lines}, [{name, value} | tail]) do
+  defp prepend_attrs({:__block__, _, lines}, [{name, value} | tail]) when is_special_attribute(name) do
     quote do
       @(unquote(name)(unquote(value)))
       unquote_splicing lines
     end
     |> prepend_attrs(tail)
   end
-  defp prepend_attrs(quoted, [{name, value} | tail]) do
+  defp prepend_attrs({:__block__, _, lines}, [{name, [value]} | tail]) do
+    quote do
+      Module.register_attribute(__MODULE__, unquote(name), persist: true)
+      @(unquote(name)(unquote(Macro.escape value)))
+      unquote_splicing lines
+    end
+    |> prepend_attrs(tail)
+  end
+  defp prepend_attrs(quoted, [{name, value} | tail]) when is_special_attribute(name) do
     quote do
       @(unquote(name)(unquote(value)))
+      unquote quoted
+    end
+    |> prepend_attrs(tail)
+  end
+  defp prepend_attrs(quoted, [{name, [value]} | tail]) do
+    quote do
+      Module.register_attribute(__MODULE__, unquote(name), persist: true)
+      @(unquote(name)(unquote(Macro.escape value)))
       unquote quoted
     end
     |> prepend_attrs(tail)
