@@ -30,7 +30,15 @@ defmodule Tria do
   alias Tria.Compiler.ElixirTranslator
 
   defmacro __using__(opts) do
-    quote do: use Tria.Compiler.Callbacks, unquote(opts)
+    quote do: use(Tria.Compiler.Callbacks, unquote(opts))
+  end
+
+  def version do
+    unquote(Mix.Project.config()[:version])
+    <> "-"
+    <> System.version()
+    <> "-"
+    <> List.to_string(:erlang.system_info(:otp_release))
   end
 
   # Public interface

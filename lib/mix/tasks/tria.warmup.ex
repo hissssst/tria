@@ -19,6 +19,20 @@ defmodule Mix.Tasks.Tria.Warmup do
   mix tria.warmup --available
   ```
 
+  During analysis a question may pop up, for example:
+  ```
+  :cover.analyse(:coverage, :line)
+
+  Is pure? [y(yes); n(no); S(show); s(stack)]
+  ```
+
+  In this case, you need to respond whether `:cover.analyze/2` is a pure function. You don't
+  need to take a purity of expressions in arguments into account, they're there just to provide
+  context.
+
+  This is required since some functions in OTP are bifs or nifs, and they can't be analyzed
+  for purity by Tria.
+
   ### Options:
 
   * `--loaded` -- to warm up cache only from modules which are loaded by default
@@ -49,9 +63,8 @@ defmodule Mix.Tasks.Tria.Warmup do
 
   def check(modules) do
     length = length modules
-    modules
-    |> Stream.with_index(1)
-    |> Enum.each(fn {module, index} ->
+
+    Enum.reduce(modules, 1, fn module, index ->
       with(
         {:ok, object_code} <- Beam.object_code(module),
         {:ok, abstract_code} <- Beam.abstract_code(object_code)
@@ -59,13 +72,23 @@ defmodule Mix.Tasks.Tria.Warmup do
         functions = Beam.functions(abstract_code)
         flength = length(functions)
 
-        functions
-        |> Stream.with_index(1)
-        |> Enum.each(fn {{function, arity}, findex} ->
+        Enum.reduce(functions, {1, now()}, fn {function, arity}, {findex, ts} ->
           status(length, index, module, flength, findex)
           Purity.check_analyze_mfarity({module, function, arity})
+          now = now()
+          difference = now - ts
+          if difference > 1000 do
+            IO.write [
+              IO.ANSI.clear_line(),
+              "\r#{inspect module}.#{function}/#{arity} took #{difference}ms to analyze!\n"
+            ]
+          end
+
+          {findex + 1, now}
         end)
       end
+
+      index + 1
     end)
   end
 
@@ -93,6 +116,10 @@ defmodule Mix.Tasks.Tria.Warmup do
       IO.ANSI.clear_line(),
       "\r#{current_module}/#{all_modules} #{inspect module} #{current_function}/#{all_functions}"
     ]
+  end
+
+  defp now do
+    :erlang.monotonic_time(:millisecond)
   end
 
 end

@@ -444,6 +444,19 @@ defmodule Tria.Compiler do
     end
     |> prepend_attrs(tail)
   end
+  defp prepend_attrs({:__block__, _, lines}, [{name, values} | tail]) do
+    attrs =
+      Enum.map(values, fn value ->
+        quote do: @(unquote(name)(unquote(Macro.escape value)))
+      end)
+
+    quote do
+      Module.register_attribute(__MODULE__, unquote(name), persist: true, accumulate: true)
+      unquote_splicing attrs
+      unquote_splicing lines
+    end
+    |> prepend_attrs(tail)
+  end
   defp prepend_attrs(quoted, [{name, value} | tail]) when is_special_attribute(name) do
     quote do
       @(unquote(name)(unquote(value)))
@@ -455,6 +468,19 @@ defmodule Tria.Compiler do
     quote do
       Module.register_attribute(__MODULE__, unquote(name), persist: true)
       @(unquote(name)(unquote(Macro.escape value)))
+      unquote quoted
+    end
+    |> prepend_attrs(tail)
+  end
+  defp prepend_attrs(quoted, [{name, values} | tail]) do
+    attrs =
+      Enum.map(values, fn value ->
+        quote do: @(unquote(name)(unquote(Macro.escape value)))
+      end)
+
+    quote do
+      Module.register_attribute(__MODULE__, unquote(name), persist: true, accumulate: true)
+      unquote_splicing attrs
       unquote quoted
     end
     |> prepend_attrs(tail)

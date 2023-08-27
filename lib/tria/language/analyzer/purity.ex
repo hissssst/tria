@@ -12,6 +12,7 @@ defmodule Tria.Language.Analyzer.Purity do
   import Tria.Language
   import Tria.Language.MFArity, only: :macros
 
+  alias Tria.Debug
   alias Tria.Debug.Tracer
   alias Tria.Language.Analyzer
   alias Tria.Language.Analyzer.Provider
@@ -97,6 +98,12 @@ defmodule Tria.Language.Analyzer.Purity do
   def check_analyze_mfarity({module, function, arity}) do
     call = dot_call(module, function, List.duplicate(nil, arity))
     check_analyze(call)
+  rescue
+    e ->
+      if Debug.debugging?(:check_analyze_mfarity) do
+        IO.puts "Failed during analysis of #{module}.#{function}/#{arity}"
+      end
+      reraise e, __STACKTRACE__
   end
 
   @spec invalidate(module()) :: :ok

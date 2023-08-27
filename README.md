@@ -40,6 +40,10 @@ This compiles the deps, and warms up the cache of used functions
 
 3. `map.field` optimization. This construction is now 3 times faster
 
+## Reporting bugs
+
+Just use `mix tria.report "INSERT BUG TITLE HERE"` and it will automatically open tracker with information about system and env prefilled
+
 ## How to debug
 
 ```sh

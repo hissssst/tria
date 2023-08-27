@@ -137,4 +137,17 @@ defmodule Tria.Language.FunctionRepo.Persister do
     end
   end
 
+  defp check_version(table) do
+    case :ets.lookup(table, :__tria_version__) do
+      [__tria_version__: version] ->
+        version == Tria.version()
+
+      _ ->
+        false
+    end
+  end
+
+  defp put_version(table) do
+    :ets.insert(table, [__tria_version__: Tria.version()])
+  end
 end

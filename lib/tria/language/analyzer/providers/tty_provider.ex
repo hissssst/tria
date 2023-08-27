@@ -71,11 +71,11 @@ defmodule Tria.Language.Analyzer.TTYProvider do
   end
 
   defp prompt(trait, {m, f, a}, %{stack: stack}) when not is_empty(stack) do
-    "\n#{ast_to_string {{:".", [], [m, f]}, [], a}}\n\nIs #{trait} [y(yes); n(no); S(show); s(stack)] "
+    "\n#{ast_to_string {{:".", [], [m, f]}, [], a}}\n\nIs #{trait}? [y(yes); n(no); S(show); s(stack)] "
   end
 
   defp prompt(trait, {m, f, a}, _) do
-    "\n#{ast_to_string {{:".", [], [m, f]}, [], a}}\n\nIs #{trait} [y(yes); n(no); S(show)] "
+    "\n#{ast_to_string {{:".", [], [m, f]}, [], a}}\n\nIs #{trait}? [y(yes); n(no); S(show)] "
   end
 
 end

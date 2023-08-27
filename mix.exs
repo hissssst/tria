@@ -4,7 +4,7 @@ defmodule Tria.MixProject do
   def project do
     [
       app: :tria,
-      version: "0.0.1",
+      version: "0.0.1-#{commit()}",
       elixir: "~> 1.13",
       start_permanent: false,
       elixirc_paths: elixirc_paths(),
@@ -55,5 +55,10 @@ defmodule Tria.MixProject do
       {:credo,    "~> 1.1",    only: :dev, runtime: false},
       {:rexbug,   "~> 1.0",    only: :dev, runtime: false},
     ]
+  end
+
+  defp commit do
+    "ref: " <> path = File.read!(".git/HEAD")
+    String.trim_trailing(File.read!(".git/#{String.trim_trailing(path)}"))
   end
 end

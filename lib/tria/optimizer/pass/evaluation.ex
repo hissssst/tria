@@ -127,7 +127,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
               { {:=, meta, [left, right]}, state }
 
             :no ->
-              q = quote do: raise MatchError, term: unquote right
+              q = quote do: raise(MatchError, term: unquote(right))
               { q, hit state }
           end
 
