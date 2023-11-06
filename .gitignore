@@ -30,3 +30,9 @@ tria-*.tar
 
 # FunctionRepo table locks
 /priv/.*ets.lock
+
+# Direnv nix shell ignore
+/.direnv
+/.envrc
+/.nix-mix
+/.nix-hex
