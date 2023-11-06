@@ -117,7 +117,7 @@ defmodule Tria.Optimizer.Pass.Evaluation do
         {left, left_state} = run_match(left, state)
         {right, right_state} = run(right, state)
         { block, state }  =
-          case Interpreter.match(left, right) do
+          case Interpreter.match(left, right, only_binds: true) do
             {_yes_or_maybe, [{new_left, new_right}]} ->
               state = if equal?(left, new_left), do: state, else: hit(state)
               { {:=, meta, [new_left, new_right]}, put_bind(state, new_left, new_right) }

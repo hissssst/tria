@@ -110,29 +110,34 @@ defmodule Tria.Language.Interpreter do
 
   # Match?
 
+  @type match_option :: {:only_binds, boolean()}
+
   @doc """
   Tries to match ast on pattern and returns the ternary result with bindings
   """
-  @spec match(Tria.t(), Tria.t()) :: {:yes | :maybe, Matchlist.t()} | :no
+  @spec match(Tria.t(), Tria.t(), [match_option()]) :: {:yes | :maybe, Matchlist.t()} | :no
+  def match(left, right, opts) do
+    with {level, matches} <- match(left, right) do
+      matches =
+        if opts[:only_binds] do
+          Enum.reject(matches, & match?({{:_, _, _}, _}, &1) or match?({same, same}, &1))
+        else
+          matches
+        end
 
-  def match({:when, _, [pattern, guards]}, ast, bindmap) do
-    case match(pattern, ast) do
-      {level, matches} when level in ~w[maybe yes]a ->
-        bindmap = Bindmap.merge_matchlist(bindmap, matches)
-        {check_guards(guards, bindmap) && level, matches}
-
-      _ ->
-        #FIXME
-        :no
+      {level, matches}
     end
   end
-  def match(other, ast, _bindmap), do: match(other, ast)
+
+  @doc """
+  Tries to match ast on pattern and returns the ternary result with matchlist
+  """
+  @spec match(Tria.t(), Tria.t()) :: {:yes | :maybe, Matchlist.t()} | :no
 
   # When
   def match({:when, _, [pattern, conditions]}, ast) do
     case match(pattern, ast) do
       {:yes, binds} ->
-        # IO.inspect binds, label: :binds
         if Enum.all?(binds, fn {_, v} -> quoted_literal?(v) end) do
           # Pre-evalute binds, because `match` returns them in quoted form
           eval_binds =
@@ -163,10 +168,6 @@ defmodule Tria.Language.Interpreter do
         #FIXME
         :no
     end
-    # raise "Not implemented"
-    # with {level, matches} <- match(pattern) do
-    #   {level, matches} && match_when?(matches, conditions)
-    # end
   end
 
   # Collections
@@ -234,7 +235,8 @@ defmodule Tria.Language.Interpreter do
   # Matching maps with multiple keys is just a permutation of tuple matches
   # But it is just a ton of nasty logic, we need to think of a way to overcome this
   def match({:%{}, _, patterns}, {:%{}, _, asts}) do
-    # When there are more patterns than non patterns, it is hard to get
+    # When there are more patterns than non patterns, it will never match
+    #FIXME Well, this is actually not true. Consider `x = 1; y = 1; %{^x => 2, ^y => 2} = %{1 => 1}`
     if length(patterns) > length(asts), do: throw :no
 
     literal_keys = fn list ->
@@ -287,14 +289,13 @@ defmodule Tria.Language.Interpreter do
 
   # Variables
   def match(tri(^_) = pinned, value), do:                   {:maybe, Matchlist.new [ {pinned, value} ]}
-  def match({:_, _, _} = var, _) when is_variable(var), do: {:yes,   Matchlist.empty() }
   def match(var, value) when is_variable(var), do:          {:yes,   Matchlist.new [ {var, value} ]}
   def match(pattern, var) when is_variable(var), do:        {:maybe, Matchlist.new [ {pattern, var} ]}
 
   def match(pattern, {_, _, l} = val) when is_list(l), do:  {:maybe, Matchlist.new [ {pattern, val} ]}
 
   # Literals
-  def match(same, same), do: {:yes, Matchlist.empty()}
+  def match(same, same), do: {:yes, Matchlist.new [ {same, same} ]}
   def match(_, _), do: :no
 
   # Helpers
