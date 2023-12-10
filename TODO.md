@@ -2,6 +2,13 @@
 
 > This is an unordered dump with features to be implemented
 
+# Million Dollar Extreme Idea!!!:
+Each function is a process (GenServer or Agent). This process handles multiple versions of the function, it's dependencies, inputs, outputs, etc.
+These processes communicate via pubsub system
+Xref, dependency tree and modules are represented by external structures (like ets tables)
+
+Compilation is complete when no pubsub messages are unsent and when every function replies that it's ready
+
 [?] `no_optimize` macro which ensures that optimizations are not called
     Kinda done because it can be specified in `@tria` annotations
 
