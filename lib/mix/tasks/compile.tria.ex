@@ -1,7 +1,11 @@
 defmodule Mix.Tasks.Compile.Tria do
-
   @moduledoc """
   Mix task for running Tria optimizing compiler
+
+  Available command-line options are:
+
+  * `--dry` — (not implemented yet) to check how compilation works without storing compilation results on disk
+  * `--force` — forces full compilation from scratch (opposite to incremental recompilation)
   """
 
   use Mix.Task.Compiler
@@ -15,16 +19,19 @@ defmodule Mix.Tasks.Compile.Tria do
   defmodule Options do
     # Internal representation `mix compile.tria` command
     @moduledoc false
-    defstruct [force: false]
+    defstruct force: false, dry: false
     def parse(["--force" | tail]), do: %__MODULE__{parse(tail) | force: true}
+    def parse(["--dry" | tail]), do: %__MODULE__{parse(tail) | dry: true}
     def parse(_), do: %__MODULE__{}
   end
 
   def run(args) do
     options = Options.parse(args)
-    Project.get!() # Just to make sure that project exists
+    # Just to make sure that project exists
+    Project.get!()
     mix_config = Project.config()
     Project.ensure_structure(mix_config)
+
     manifest_path =
       mix_config
       |> Project.manifest_path()
@@ -40,7 +47,7 @@ defmodule Mix.Tasks.Compile.Tria do
       tags ->
         tags
         |> String.split(",")
-        |> Enum.map(& String.to_atom String.trim &1)
+        |> Enum.map(&String.to_atom(String.trim(&1)))
         |> Debug.flag_debug()
     end
 
@@ -51,19 +58,20 @@ defmodule Mix.Tasks.Compile.Tria do
       |> Enum.each(&Tracer.trace(&1, only: :all))
     end
 
-    root = Path.dirname Project.project_file()
+    root = Path.dirname(Project.project_file())
 
     elixirc_paths =
       mix_config
       |> Keyword.fetch!(:elixirc_paths)
       |> Enum.map(fn path -> Path.join(root, path) end)
 
-    build_path = Path.join [
-      Project.build_path(mix_config),
-      "lib",
-      to_string(mix_config[:project] || mix_config[:app]),
-      "ebin"
-    ]
+    build_path =
+      Path.join([
+        Project.build_path(mix_config),
+        "lib",
+        to_string(mix_config[:project] || mix_config[:app]),
+        "ebin"
+      ])
 
     File.mkdir_p!(build_path)
 
@@ -109,7 +117,7 @@ defmodule Mix.Tasks.Compile.Tria do
           end
 
         %{type: other} ->
-          IO.warn "Unrecognized filetype #{inspect other} for #{path}"
+          IO.warn("Unrecognized filetype #{inspect(other)} for #{path}")
           []
       end
     end)
@@ -143,10 +151,9 @@ defmodule Mix.Tasks.Compile.Tria do
       ignore_module_conflict: true
     ]
     |> Tria.Compiler.ElixirCompiler.with_compiler_options(fn ->
-      :code.add_path to_charlist Path.dirname filename
-      :code.purge module
-      :code.load_file module
+      :code.add_path(to_charlist(Path.dirname(filename)))
+      :code.purge(module)
+      :code.load_file(module)
     end)
   end
-
 end

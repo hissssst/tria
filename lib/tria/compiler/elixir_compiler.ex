@@ -1,5 +1,4 @@
 defmodule Tria.Compiler.ElixirCompiler do
-
   @moduledoc """
   Wrapper for `Kernel.ParallelCompiler` with inter-module tracing, ensuring that only
   one compiler runs at the time
@@ -16,16 +15,21 @@ defmodule Tria.Compiler.ElixirCompiler do
 
   — `:trace_deps` (boolean) - to trace inter-module compile-time dependencies
   """
-  @type option :: {:trace_deps, boolean()}
-  | {:ignore_module_conflict, boolean()}
-  | {:no_warn_undefined, boolean() | :all}
+  @type option ::
+          {:trace_deps, boolean()}
+          | {:ignore_module_conflict, boolean()}
+          | {:no_warn_undefined, boolean() | :all}
+
+  @type maybe_with_tracer(type) :: {type, DependencyTracer.graphs()} | type
 
   @doc """
   Like `Kernel.ParallelCompiler.compile`, but with ability to pass `Code` options
   """
-  @spec parallel_compile([Path.t()], Keyword.t()) :: {:ok, [atom()], list()} | {:error, list(), list()}
+  @spec parallel_compile([Path.t()], Keyword.t()) ::
+          maybe_with_tracer({:ok, [atom()], list()} | {:error, list(), list()})
   def parallel_compile(files, opts) do
     {parallel_options, compiler_options} = Keyword.split(opts, @parallel_options)
+
     with_compiler_options(compiler_options, fn ->
       parallel_options = maybe_update_hooks(compiler_options, parallel_options)
       Kernel.ParallelCompiler.compile(files, parallel_options)
@@ -49,14 +53,22 @@ defmodule Tria.Compiler.ElixirCompiler do
 
             lined =
               Macro.postwalk(quoted, fn ast ->
-                Macro.update_meta(ast, &Keyword.put(&1, :line, :erlang.unique_integer([:positive])))
+                Macro.update_meta(
+                  ast,
+                  &Keyword.put(&1, :line, :erlang.unique_integer([:positive]))
+                )
               end)
 
             try do
               Code.compile_quoted(lined, file)
             rescue
               e in CompileError ->
-                Debug.inspect_ast(lined, label: :failed_to_compile, with_contexts: true, highlight_line: e.line)
+                Debug.inspect_ast(lined,
+                  label: :failed_to_compile,
+                  with_contexts: true,
+                  highlight_line: e.line
+                )
+
                 reraise e, stacktrace
             end
           else
@@ -66,8 +78,9 @@ defmodule Tria.Compiler.ElixirCompiler do
     end)
   end
 
-  @spec ensure_compiled(module()) :: {:module, module}
-  | {:error, :embedded | :badfile | :nofile | :on_load_failure | :unavailable}
+  @spec ensure_compiled(module()) ::
+          {:module, module}
+          | {:error, :embedded | :badfile | :nofile | :on_load_failure | :unavailable}
   def ensure_compiled(module) do
     at_lock(fn -> Code.ensure_compiled(module) end)
   end
@@ -82,13 +95,14 @@ defmodule Tria.Compiler.ElixirCompiler do
     at_lock(fn -> Code.ensure_loaded!(module) end)
   end
 
-  @spec with_compiler_options(Keyword.t(), (() -> any())) :: any()
+  @spec with_compiler_options(Keyword.t(), (-> any())) :: any()
   def with_compiler_options([], func), do: at_lock(func)
+
   def with_compiler_options(options, func) do
     at_lock(fn ->
       {trace_deps?, options} = Keyword.pop(options, :trace_deps, false)
       tracers = if trace_deps?, do: [DependencyTracer], else: []
-      options = Keyword.update(options, :tracers, tracers, & &1 ++ tracers)
+      options = Keyword.update(options, :tracers, tracers, &(&1 ++ tracers))
 
       was =
         Enum.map(options, fn {key, value} ->
@@ -119,7 +133,7 @@ defmodule Tria.Compiler.ElixirCompiler do
   considered transparent, therefore no error is
   raised when acquiring already acquired lock
   """
-  @spec at_lock((() -> any())) :: any()
+  @spec at_lock((-> any())) :: any()
   def at_lock(func) do
     case call(:lock) do
       :ok ->
@@ -138,14 +152,15 @@ defmodule Tria.Compiler.ElixirCompiler do
     pid = start()
     ref = Process.monitor(pid)
     send(pid, {msg, self(), ref})
+
     receive do
       {^ref, answer} ->
         answer
 
       {:DOWN, ^ref, :process, ^pid, reason} ->
-        raise ArgumentError, "Compiler lock died with #{inspect reason}"
-
-      after :timer.hours(2) ->
+        raise ArgumentError, "Compiler lock died with #{inspect(reason)}"
+    after
+      :timer.hours(2) ->
         :erlang.exit({:timeout, {__MODULE__, :call, [msg]}})
     end
   end
@@ -153,6 +168,7 @@ defmodule Tria.Compiler.ElixirCompiler do
   defp start do
     with nil <- Process.whereis(__MODULE__) do
       pid = spawn(fn -> loop(false) end)
+
       try do
         Process.register(pid, __MODULE__)
         pid
@@ -201,7 +217,7 @@ defmodule Tria.Compiler.ElixirCompiler do
 
   defp maybe_with_tracer(opts, func) do
     if DependencyTracer in Keyword.get(opts, :tracers, []) do
-      DependencyTracer.with_tracer func
+      DependencyTracer.with_tracer(func)
     else
       func.()
     end
@@ -212,7 +228,10 @@ defmodule Tria.Compiler.ElixirCompiler do
       each_file =
         case Keyword.fetch(parallel_options, :each_file) do
           {:ok, func} ->
-            fn file -> DependencyTracer.complete_file(file); func.(file) end
+            fn file ->
+              DependencyTracer.complete_file(file)
+              func.(file)
+            end
 
           :error ->
             fn file -> DependencyTracer.complete_file(file) end
@@ -226,6 +245,7 @@ defmodule Tria.Compiler.ElixirCompiler do
                 graphs = DependencyTracer.get_graphs()
                 func.(graphs)
               end
+
             Keyword.put(parallel_options, :each_cycle, func)
 
           _ ->
@@ -237,5 +257,4 @@ defmodule Tria.Compiler.ElixirCompiler do
       parallel_options
     end
   end
-
 end

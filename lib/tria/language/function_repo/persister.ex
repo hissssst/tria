@@ -1,27 +1,19 @@
 defmodule Tria.Language.FunctionRepo.Persister do
-
   @moduledoc """
   This module is a singleton genserver which periodically persists tables on disk.
   Each table is stored using atomic file lock. This can break on some filesystems.
   """
 
   use GenServer
+  alias Tria.Debug
 
   @doc """
-  Adds filetable to periodical sync operation
+  New filetable to periodical sync operation
   """
-  @spec add_filetable(charlist(), atom()) :: {:ok, :already_exists | :new} | {:error, :already_exists}
-  def add_filetable(filename, tablename) when is_list(filename) do
-    case start(filetables: %{filename => tablename}) do
-      {:ok, _} ->
-        {:ok, :started}
-
-      {:error, {:already_started, pid}} ->
-        GenServer.call(pid, {:add_filetable, filename, tablename})
-    end
-  end
-  def add_filetable(filename, _) when is_binary(filename) do
-    raise "Filename #{inspect filename} must be a charlist"
+  @spec new_filetable(charlist(), atom(), list()) ::
+          {:ok, :overwritten | :picked_up | :created} | {:error, :already_exists}
+  def new_filetable(filename, tablename, ets_options) do
+    GenServer.call(start(), {:new_filetable, filename, tablename, ets_options})
   end
 
   @doc """
@@ -29,20 +21,17 @@ defmodule Tria.Language.FunctionRepo.Persister do
   """
   @spec read_filetable(charlist(), atom()) :: :ok
   def read_filetable(filename, tablename) do
-    case start() do
-      {:ok, pid} ->
-        GenServer.call(pid, {:read_filetable, filename, tablename})
-
-      {:error, {:already_started, pid}} ->
-        GenServer.call(pid, {:read_filetable, filename, tablename})
-    end
+    GenServer.call(start(), {:read_filetable, filename, tablename})
   end
 
   # Internal
 
   @spec start(Keyword.t()) :: GenServer.on_start()
   defp start(opts \\ []) do
-    GenServer.start(__MODULE__, opts, name: __MODULE__)
+    case GenServer.start(__MODULE__, opts, name: __MODULE__) do
+      {:ok, pid} -> pid
+      {:error, {:already_started, pid}} -> pid
+    end
   end
 
   # GenServer callbacks
@@ -51,7 +40,7 @@ defmodule Tria.Language.FunctionRepo.Persister do
     state = %{
       timeout: Keyword.get(opts, :timeout, 100),
       timer: nil,
-      filetables: Keyword.get(opts, :filetables, %{})
+      filetables: %{}
     }
 
     send(self(), :tick)
@@ -69,42 +58,79 @@ defmodule Tria.Language.FunctionRepo.Persister do
       {:ok, ^tablename} = :ets.file2tab(filename)
       tablename
     end)
+
     {:reply, :ok, state}
   end
 
-  def handle_call({:add_filetable, filename, tablename}, _, %{filetables: filetables} = state) do
+  def handle_call(
+        {:new_filetable, filename, tablename, ets_opts},
+        _,
+        %{filetables: filetables} = state
+      ) do
     case filetables do
       %{^filename => ^tablename} ->
-        {:reply, {:ok, :already_exists}, state}
+        {:reply, {:ok, :exists}, state}
 
-      %{^filename => _} ->
-        {:reply, {:error, :already_exists}, state}
+      %{^filename => other_tablename} ->
+        raise "Table at path #{filename} already exists as #{other_tablename}, but was requested to be started as #{tablename}"
 
       %{} ->
-        state = %{state | filetables: Map.put(filetables, filename, tablename)}
-        {:reply, {:ok, :new}, sync(state)}
+        if File.exists?(filename) do
+          File.rm(to_lockfile(filename))
+
+          case :ets.file2tab(filename) do
+            {:error, :badfile} ->
+              raise "Table #{tablename} at #{filename} seems to be broken"
+
+            {:ok, ^tablename} ->
+              if check_version(tablename) do
+                Debug.puts("Picked up existing #{filename} as #{tablename}")
+                state = %{state | filetables: Map.put(filetables, filename, tablename)}
+                {:reply, {:ok, :picked_up}, state}
+              else
+                Debug.puts("Table #{tablename} at #{filename} seems to have outdated version")
+                IO.puts("Overwriting version for now")
+                put_version(tablename)
+                state = %{state | filetables: Map.put(filetables, filename, tablename)}
+                {:reply, {:ok, :overwritten}, state}
+              end
+
+            {:ok, other_tablename} ->
+              raise "Table at path #{filename} already exists as #{other_tablename}, but was requested to be started as #{tablename}"
+          end
+        else
+          Debug.puts("Created empty #{filename} as #{tablename}")
+          :ets.new(tablename, ets_opts)
+          put_version(tablename)
+          state = %{state | filetables: Map.put(filetables, filename, tablename)}
+          {:reply, {:ok, :created}, state}
+        end
     end
   end
 
   defp sync(%{filetables: filetables, timer: timer, timeout: timeout} = state) do
     timer && Process.cancel_timer(timer)
+
     Enum.each(filetables, fn {filename, tablename} ->
       filename
       |> to_lockfile()
       |> with_filelock(fn ->
+        Debug.puts("Syncing #{tablename} to #{filename}")
         :ok = :ets.tab2file(tablename, filename, sync: true)
       end)
     end)
+
     %{state | timer: Process.send_after(self(), :tick, timeout)}
   rescue
     exception ->
-      IO.puts "Try removing lock file in `priv` dir of Tria"
+      IO.puts("Try removing lock file in `priv` dir of Tria")
       reraise exception, __STACKTRACE__
   end
 
   defp with_filelock(lockfile, func) do
     maybe_delete_old(lockfile)
     salt = :rand.bytes(16)
+
     with(
       :ok <- File.write(lockfile, salt, [:exclusive, :raw]),
       {:ok, ^salt} <- File.read(lockfile)
@@ -131,6 +157,7 @@ defmodule Tria.Language.FunctionRepo.Persister do
     with {:ok, %File.Stat{ctime: ctime}} <- File.stat(lockfile) do
       timestamp = NaiveDateTime.from_erl!(ctime)
       diff = NaiveDateTime.diff(NaiveDateTime.utc_now(), timestamp)
+
       if diff >= 2 do
         File.rm!(lockfile)
       end
@@ -148,6 +175,6 @@ defmodule Tria.Language.FunctionRepo.Persister do
   end
 
   defp put_version(table) do
-    :ets.insert(table, [__tria_version__: Tria.version()])
+    :ets.insert(table, __tria_version__: Tria.version())
   end
 end

@@ -1,5 +1,4 @@
 defmodule Tria.Language.FunctionRepo do
-
   @moduledoc """
   Repository for working with {module, function, arity} traits
   It lazily initializes trait tables. Each trait has it's own table.
@@ -26,10 +25,11 @@ defmodule Tria.Language.FunctionRepo do
   @type select_options() :: [select_option()] | []
 
   @typedoc "Each options defines the upon which to select"
-  @type select_option :: {:module, module()}
-  | {:arity, arity()}
-  | {:function, atom()}
-  | {:entry, entry()}
+  @type select_option ::
+          {:module, module()}
+          | {:arity, arity()}
+          | {:function, atom()}
+          | {:entry, entry()}
 
   @doc "Inserts the entry for the specified mfa and trait"
   @spec insert(mfa(), trait(), entry()) :: entry()
@@ -46,7 +46,7 @@ defmodule Tria.Language.FunctionRepo do
   def fetch(mfa, trait) do
     trait
     |> ensure_exists()
-    |> :ets.lookup(MFArity.to_mfarity mfa)
+    |> :ets.lookup(MFArity.to_mfarity(mfa))
     |> case do
       [{_, entry}] -> {:ok, entry}
       _ -> :error
@@ -55,11 +55,11 @@ defmodule Tria.Language.FunctionRepo do
 
   @doc "Looks up the entry for the specified mfa and trait in maybe style"
   @spec lookup(mfa(), trait(), default) :: entry | default
-  when default: any()
+        when default: any()
   def lookup(mfa, trait, default \\ nil) do
     trait
     |> ensure_exists()
-    |> :ets.lookup(MFArity.to_mfarity mfa)
+    |> :ets.lookup(MFArity.to_mfarity(mfa))
     |> case do
       [{_, entry}] -> entry
       _ -> default
@@ -67,11 +67,11 @@ defmodule Tria.Language.FunctionRepo do
   end
 
   @doc "Looks up all entries for the specified mfa"
-  @spec lookup_all(mfa()) :: %{trait() => maybe entry()}
+  @spec lookup_all(mfa()) :: %{trait() => maybe(entry())}
   def lookup_all(mfa), do: lookup_all(mfa, traits())
 
   @doc "Looks up all entries for the specified traits and mfa"
-  @spec lookup_all(mfa(), [trait()]) :: %{trait() => maybe entry()}
+  @spec lookup_all(mfa(), [trait()]) :: %{trait() => maybe(entry())}
   def lookup_all(mfa, traits_to_lookup) do
     Map.new(traits_to_lookup, fn trait -> {trait, lookup(mfa, trait)} end)
   end
@@ -81,7 +81,7 @@ defmodule Tria.Language.FunctionRepo do
   def select_by(trait, opts) do
     trait
     |> ensure_exists()
-    |> :ets.match_object(opts_to_spec opts)
+    |> :ets.match_object(opts_to_spec(opts))
   end
 
   @spec exists?(trait(), select_options()) :: boolean()
@@ -95,7 +95,7 @@ defmodule Tria.Language.FunctionRepo do
   @doc "Filters all trait tables with the specified select options"
   @spec select_all_by([trait()] | nil, select_options()) :: [{mfa(), %{trait() => entry()}}]
   def select_all_by(traits_to_select \\ nil, opts) do
-    spec = opts_to_spec opts
+    spec = opts_to_spec(opts)
 
     traits_to_select = with nil <- traits_to_select, do: traits()
 
@@ -132,10 +132,11 @@ defmodule Tria.Language.FunctionRepo do
 
   @spec exists_any?([trait()], select_options()) :: boolean()
   def exists_any?(traits, select_opts) do
-    do_exists_any?(traits, opts_to_spec select_opts)
+    do_exists_any?(traits, opts_to_spec(select_opts))
   end
 
   defp do_exists_any?([], _), do: false
+
   defp do_exists_any?([trait | traits], spec) do
     trait
     |> ensure_exists()
@@ -191,35 +192,37 @@ defmodule Tria.Language.FunctionRepo do
   defp new_table(trait) when trait in @persistent_traits do
     new_persistent_table(trait)
   end
+
   defp new_table(trait), do: new_emphemeral_table(trait)
 
+  @table_options [
+    :set,
+    :public,
+    :named_table,
+    {:write_concurrency, true},
+    {:read_concurrency, true}
+  ]
+
   defp new_emphemeral_table(trait) do
-    :ets.new(trait, [:set, :public, :named_table, {:write_concurrency, true}, {:read_concurrency, true}])
+    :ets.new(trait, @table_options)
   end
 
   defp new_persistent_table(trait) do
     filename = file_for_trait(trait)
-    if File.exists?(filename) do
-      #TODO backup system
-      Persister.read_filetable(filename, trait)
-    else
-      new_emphemeral_table(trait)
-    end
-    Persister.add_filetable(filename, trait)
+    Persister.new_filetable(filename, trait, @table_options)
   end
 
   defp file_for_trait(trait) do
-    ~c"#{:code.priv_dir :tria}/#{trait}.ets"
+    ~c"#{:code.priv_dir(:tria)}/#{trait}.ets"
   end
 
   # Creates match spec from opts for `select_*` functions
   defp opts_to_spec(opts) do
     underscore = :_
-    module   = Keyword.get(opts, :module, underscore)
-    arity    = Keyword.get(opts, :arity, underscore)
+    module = Keyword.get(opts, :module, underscore)
+    arity = Keyword.get(opts, :arity, underscore)
     function = Keyword.get(opts, :function, underscore)
-    entry    = Keyword.get(opts, :entry, underscore)
+    entry = Keyword.get(opts, :entry, underscore)
     {{module, function, arity}, entry}
   end
-
 end

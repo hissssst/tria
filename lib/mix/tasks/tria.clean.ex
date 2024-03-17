@@ -31,7 +31,7 @@ defmodule Mix.Tasks.Tria.Clean do
         if String.ends_with?(filename, "_cache.ets") do
           priv
           |> Path.join(filename)
-          |> info()
+          |> info("Cache file: ")
           |> List.wrap()
         else
           []
@@ -39,29 +39,33 @@ defmodule Mix.Tasks.Tria.Clean do
       end)
 
     confirmed? =
-      with false <- args in [["-y"], ["--yes"]] do
-        result = IO.gets("Confirm? [Y(yes); n(no)] ") in ["y\n", "Y\n", "\n"]
-        unless result do
-          IO.write [IO.ANSI.red(), "Denied. Nothing cleaned\n", IO.ANSI.reset()]
-        end
-        result
+      "-y" in args or
+        "--yes" in args or
+        IO.gets("Confirm? [Y(yes); n(no)] ") in ["y\n", "Y\n", "\n"]
+
+    if confirmed? and to_delete != [] do
+      Enum.each(to_delete, fn file ->
+        info(file, "Deleting: ")
+        File.rm!(file)
+      end)
+    else
+      if to_delete == [] do
+        IO.write([IO.ANSI.yellow(), "No cache files found!\n", IO.ANSI.reset()])
       end
 
-    if confirmed? do
-      Enum.each(to_delete, &File.rm/1)
+      IO.write([IO.ANSI.red(), "Nothing cleaned\n", IO.ANSI.reset()])
     end
   end
 
-  defp info(cache) do
-    IO.write [
-      "Deleting file: ",
+  defp info(cache, prefix) do
+    IO.write([
+      prefix,
       IO.ANSI.green(),
       cache,
       IO.ANSI.reset(),
       "\n"
-    ]
+    ])
 
     cache
   end
-
 end

@@ -1,5 +1,4 @@
 defmodule Tria.Compiler do
-
   @moduledoc """
   Entry-point for compiling Elixir projects.
   """
@@ -51,8 +50,8 @@ defmodule Tria.Compiler do
 
   @special_functions [__info__: 1, __struct__: 2, __struct__: 1, __impl__: 1]
 
-  defguard is_special(function, arity) when
-    {function, arity} in @special_functions
+  defguard is_special(function, arity)
+           when {function, arity} in @special_functions
 
   ## Project compilation pipeline
 
@@ -63,9 +62,10 @@ defmodule Tria.Compiler do
   - `:build_path` -- (required) the path which will be used to store the .beam files
   - `:manifest` -- manifest of already compiled project. When omitted, project is recompiled from scratch
   """
-  @type compile_option :: {:context, module()}
-  | {:build_path, Path.type(:absolute)}
-  | {:manifest, Manifest.t()}
+  @type compile_option ::
+          {:context, module()}
+          | {:build_path, Path.type(:absolute)}
+          | {:manifest, Manifest.t()}
 
   @doc """
   Entry point in a compilation process.
@@ -78,8 +78,10 @@ defmodule Tria.Compiler do
 
   3. Caller calls `recompile_from_beam/3`
   """
-  @spec compile([Path.type(:absolute)], [compile_option()] | map()) :: {Manifest.t(), [{module(), binary()}]}
+  @spec compile([Path.type(:absolute)], [compile_option()] | map()) ::
+          {Manifest.t(), [{module(), binary()}]}
   def compile(paths, opts) when is_list(opts), do: compile(paths, Map.new(opts))
+
   def compile(paths, opts) when is_map(opts) do
     %{manifest: manifest} = opts = Map.put_new_lazy(opts, :manifest, fn -> %Manifest{} end)
 
@@ -92,44 +94,59 @@ defmodule Tria.Compiler do
   end
 
   defp compile_files_diff([], _, %{manifest: manifest}), do: {manifest, []}
-  defp compile_files_diff(files_diff, _paths, %{build_path: build_path, context: context, manifest: manifest} = opts) do
+
+  defp compile_files_diff(
+         files_diff,
+         _paths,
+         %{build_path: build_path, context: context, manifest: manifest} = opts
+       ) do
     caller = self()
-    added_and_changed = for {x, file} when x in ~w[added changed]a <- files_diff, do: file
 
-    ElixirCompiler.parallel_compile(added_and_changed, [
-      # Code options
-      ignore_module_conflict: true,
-      no_warn_undefined: :all,
-      trace_deps: true,
-      debug_info: true,
-
-      # ParallelCompiler options
-      dest: build_path,
-      each_module: fn file, module, bytecode ->
-        Debug.inspect(module, label: :each_module)
-        Beam.store_object_code(module, bytecode)
-        send(caller, {:last_cycle_compiled, {module, bytecode, file}})
-      end,
-      each_cycle: fn graphs ->
-        modules =
-          for {module, bytecode, file} <- compiled(:last_cycle_compiled) do
-            send(caller, {:compiled, {module, bytecode, file}})
-            module
-          end
-
-        for {graph, links} <- graphs, do: FunctionGraph.relink_many(graph, links)
-
-        manifest = Manifest.reflect_graphs(manifest)
-        dependant_modules = Manifest.compile_time_dependants(manifest, modules)
-        files = Manifest.infer_files(manifest, dependant_modules)
-
-        Debug.inspect(modules, label: :modules)
-        Debug.inspect(dependant_modules, label: :dependants)
-        Debug.inspect(files, label: :files_of_dependants)
-
-        {:compile, files, []}
+    added_and_changed =
+      for {status, file} when status in ~w[added changed]a <- files_diff do
+        file
       end
-    ])
+
+    result =
+      ElixirCompiler.parallel_compile(added_and_changed,
+        # Code options
+        ignore_module_conflict: true,
+        no_warn_undefined: :all,
+        trace_deps: true,
+        debug_info: true,
+
+        # ParallelCompiler options
+        dest: build_path,
+        each_module: fn file, module, bytecode ->
+          Debug.inspect(module, label: :each_module)
+          Beam.store_object_code(module, bytecode)
+          send(caller, {:last_cycle_compiled, {module, bytecode, file}})
+        end,
+        each_cycle: fn graphs ->
+          modules =
+            for {module, bytecode, file} <- compiled(:last_cycle_compiled) do
+              send(caller, {:compiled, {module, bytecode, file}})
+              module
+            end
+
+          for {graph, links} <- graphs, do: FunctionGraph.relink_many(graph, links)
+
+          manifest = Manifest.reflect_graphs(manifest)
+          dependant_modules = Manifest.compile_time_dependants(manifest, modules)
+          files = Manifest.infer_files(manifest, dependant_modules)
+
+          Debug.inspect(modules, label: :modules)
+          Debug.inspect(dependant_modules, label: :dependants)
+          Debug.inspect(files, label: :files_of_dependants)
+
+          {:compile, files, []}
+        end
+      )
+
+    with {{:error, _, _}, _} <- result do
+      IO.write([IO.ANSI.red(), "Compilation stopped due to the errors above.\n", IO.ANSI.reset()])
+      System.halt(1)
+    end
 
     changed_files = for {:changed, file} <- files_diff, do: file
 
@@ -174,7 +191,8 @@ defmodule Tria.Compiler do
   defp compiled(prefix) do
     receive do
       {^prefix, message} -> [message | compiled(prefix)]
-      after 0 -> []
+    after
+      0 -> []
     end
   end
 
@@ -197,10 +215,12 @@ defmodule Tria.Compiler do
   """
   @type recompile_option :: compile_option() | {:file, binary()}
 
-  @spec recompile_from_beam(module(), binary(), [recompile_option()] | map()) :: {module(), binary()}
+  @spec recompile_from_beam(module(), binary(), [recompile_option()] | map()) ::
+          {module(), binary()}
   def recompile_from_beam(module, binary, opts) when is_list(opts) do
     recompile_from_beam(module, binary, Map.new(opts))
   end
+
   def recompile_from_beam(module, binary, %{context: context, file: file}) do
     {moduledoc, docs} = Beam.docs(binary)
     ac = Beam.abstract_code!(binary)
@@ -208,16 +228,21 @@ defmodule Tria.Compiler do
     attributes = Beam.attributes(ac)
     public = Map.get(attributes, :export, [])
     annotations = Map.get(attributes, :tria_acc, [])
-    types = prepare_types(
-      Map.get(attributes, :type, []),
-      Map.get(attributes, :typep, []),
-      Map.get(attributes, :opaque, [])
-    )
+
+    types =
+      prepare_types(
+        Map.get(attributes, :type, []),
+        Map.get(attributes, :typep, []),
+        Map.get(attributes, :opaque, [])
+      )
+
     specs = prepare_specs(Map.get(attributes, :spec, []))
     callbacks = Map.get(attributes, :callback, [])
+
     for {{name, arity}, _} <- callbacks do
       FunctionRepo.insert({module, name, arity}, :callback, true)
     end
+
     callbacks = prepare_callbacks(callbacks)
 
     user_attributes =
@@ -230,7 +255,6 @@ defmodule Tria.Compiler do
         file
         module
         opaque
-        optional_callbacks
         spec
         tria_acc
         type
@@ -286,7 +310,11 @@ defmodule Tria.Compiler do
 
     [{^module, binary}] =
       {:defmodule, [file: file], [module, [do: body]]}
-      |> ElixirCompiler.compile_quoted(file: file, ignore_module_conflict: true, no_warn_undefined: :all)
+      |> ElixirCompiler.compile_quoted(
+        file: file,
+        ignore_module_conflict: true,
+        no_warn_undefined: :all
+      )
 
     {module, binary}
   end
@@ -362,7 +390,9 @@ defmodule Tria.Compiler do
       _ -> false
     end)
     |> case do
-      nil -> nil
+      nil ->
+        nil
+
       fields ->
         required = for {:%{}, _, [field: field, required: true]} <- fields, do: field
         {:@, [], [{:enforce_keys, [], [required]}]}
@@ -372,6 +402,7 @@ defmodule Tria.Compiler do
   # Leave struct as is, because it is faster to call it that way
   defp delegate(_, {{module, :def, :__struct__, 0}, [{[], _, [do: body]}]}, _, _) do
     Kernel.Utils.announce_struct(module)
+
     case body do
       {:%{}, _, pairs} ->
         pairs
@@ -401,12 +432,18 @@ defmodule Tria.Compiler do
   end
 
   # Leave delegate defmacros, but we also prepend __CALLER__
-  defp delegate(tria_context, {{module, :defmacro, name, arity} = signature, _clauses}, meta, attrs) do
+  defp delegate(
+         tria_context,
+         {{module, :defmacro, name, arity} = signature, _clauses},
+         meta,
+         attrs
+       ) do
     args = Macro.generate_unique_arguments(arity, nil)
     callargs = [{:__CALLER__, [], nil} | args]
     fname = fname(signature)
 
-    {:defmacro, meta, [{name, meta, args}, [do: dot_call(tria_context, fname, callargs, meta, meta)]]}
+    {:defmacro, meta,
+     [{name, meta, args}, [do: dot_call(tria_context, fname, callargs, meta, meta)]]}
     |> prepend_attrs(attrs)
     |> Tracer.tag_ast(key: {module, name, arity}, label: :delegated)
   end
@@ -426,62 +463,70 @@ defmodule Tria.Compiler do
 
   @spec prepend_attrs(Macro.t(), [{atom(), nil | [Macro.t()]}]) :: Macro.t()
   defp prepend_attrs(quoted, []), do: quoted
+
   defp prepend_attrs(quoted, [{_name, none} | tail]) when none in [[], nil] do
     prepend_attrs(quoted, tail)
   end
-  defp prepend_attrs({:__block__, _, lines}, [{name, value} | tail]) when is_special_attribute(name) do
+
+  defp prepend_attrs({:__block__, _, lines}, [{name, value} | tail])
+       when is_special_attribute(name) do
     quote do
-      @(unquote(name)(unquote(value)))
-      unquote_splicing lines
+      @unquote(name)(unquote(value))
+      unquote_splicing(lines)
     end
     |> prepend_attrs(tail)
   end
+
   defp prepend_attrs({:__block__, _, lines}, [{name, [value]} | tail]) do
     quote do
       Module.register_attribute(__MODULE__, unquote(name), persist: true)
-      @(unquote(name)(unquote(Macro.escape value)))
-      unquote_splicing lines
+      @unquote(name)(unquote(Macro.escape(value)))
+      unquote_splicing(lines)
     end
     |> prepend_attrs(tail)
   end
+
   defp prepend_attrs({:__block__, _, lines}, [{name, values} | tail]) do
     attrs =
       Enum.map(values, fn value ->
-        quote do: @(unquote(name)(unquote(Macro.escape value)))
+        quote do: @unquote(name)(unquote(Macro.escape(value)))
       end)
 
     quote do
       Module.register_attribute(__MODULE__, unquote(name), persist: true, accumulate: true)
-      unquote_splicing attrs
-      unquote_splicing lines
+      unquote_splicing(attrs)
+      unquote_splicing(lines)
     end
     |> prepend_attrs(tail)
   end
+
   defp prepend_attrs(quoted, [{name, value} | tail]) when is_special_attribute(name) do
     quote do
-      @(unquote(name)(unquote(value)))
-      unquote quoted
+      @unquote(name)(unquote(value))
+      unquote(quoted)
     end
     |> prepend_attrs(tail)
   end
+
   defp prepend_attrs(quoted, [{name, [value]} | tail]) do
     quote do
       Module.register_attribute(__MODULE__, unquote(name), persist: true)
-      @(unquote(name)(unquote(Macro.escape value)))
-      unquote quoted
+      @unquote(name)(unquote(Macro.escape(value)))
+      unquote(quoted)
     end
     |> prepend_attrs(tail)
   end
+
   defp prepend_attrs(quoted, [{name, values} | tail]) do
     attrs =
       Enum.map(values, fn value ->
-        quote do: @(unquote(name)(unquote(Macro.escape value)))
+        quote do: @unquote(name)(unquote(Macro.escape(value)))
       end)
 
     quote do
       Module.register_attribute(__MODULE__, unquote(name), persist: true, accumulate: true)
-      unquote_splicing attrs
-      unquote quoted
+      unquote_splicing(attrs)
+      unquote(quoted)
     end
     |> prepend_attrs(tail)
   end
@@ -539,6 +584,7 @@ defmodule Tria.Compiler do
     fn_clauses =
       Enum.flat_map(clauses, fn {args, guards, body} ->
         args = append_guards(args, guards)
+
         body =
           case body do
             [do: body] -> body
@@ -546,14 +592,15 @@ defmodule Tria.Compiler do
           end
 
         quote do
-          unquote_splicing args -> unquote body
+          unquote_splicing(args) -> unquote(body)
         end
       end)
 
     {:fn, [], fn_clauses}
   end
+
   def clauses_to_fn(args, guards, body) do
-    clauses_to_fn [{args, guards, body}]
+    clauses_to_fn([{args, guards, body}])
   end
 
   @doc """
@@ -566,11 +613,11 @@ defmodule Tria.Compiler do
 
   def fn_to_clauses(fn_clauses) when is_list(fn_clauses) do
     Enum.map(fn_clauses, fn
-      {:"->", _, [args, {:try, _, [body]}]} ->
+      {:->, _, [args, {:try, _, [body]}]} ->
         {guards, args} = pop_guards(args)
         {args, guards, body}
 
-      {:"->", _, [args, body]} ->
+      {:->, _, [args, body]} ->
         {guards, args} = pop_guards(args)
         {args, guards, [do: body]}
     end)
@@ -582,13 +629,19 @@ defmodule Tria.Compiler do
 
     defs =
       clauses
-      |> Enum.map(fn {args, guards, body} -> {from_tria(args), from_tria(guards), from_tria(body)} end)
+      |> Enum.map(fn {args, guards, body} ->
+        {from_tria(args), from_tria(guards), from_tria(body)}
+      end)
       |> Enum.map(fn
         {args, [], body} ->
-          quote do: unquote(kind)(unquote(name)(unquote_splicing args), unquote(body))
+          quote do: unquote(kind)(unquote(name)(unquote_splicing(args)), unquote(body))
 
         {args, guards, body} ->
-          quote do: unquote(kind)(unquote(name)(unquote_splicing args) when unquote(join_when guards), unquote(body))
+          quote do:
+                  unquote(kind)(
+                    unquote(name)(unquote_splicing(args)) when unquote(join_when(guards)),
+                    unquote(body)
+                  )
       end)
 
     {:__block__, [], defs}
@@ -616,11 +669,9 @@ defmodule Tria.Compiler do
   end
 
   defp unmacro_name(name) do
-    case to_string name do
+    case to_string(name) do
       "MACRO-" <> name -> String.to_atom(name)
       _ -> name
     end
   end
-
-
 end
