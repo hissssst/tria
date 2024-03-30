@@ -8,6 +8,9 @@ on:
 
 jobs:
   test:
+    strategy:
+      matrix:
+        elixir-version: ['1.14', '1.15', '1.16']
     name: CI
     runs-on: ubuntu-latest
 
@@ -19,8 +22,8 @@ jobs:
       uses: erlef/setup-beam@v1
       id: setup-beam
       with:
-        otp-version: '25'
-        elixir-version: '1.14'
+        otp-version: '26'
+        elixir-version: ${{ matrix.elixir-version }}
 
     - name: Restore dependencies and _build
       uses: actions/cache/restore@v3
