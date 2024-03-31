@@ -100,13 +100,14 @@ defmodule Tria.Compiler do
          _paths,
          %{build_path: build_path, context: context, manifest: manifest} = opts
        ) do
-    caller = self()
+    ContextServer.restore!(context, present: not manifest.new, build_path: build_path)
 
     added_and_changed =
       for {status, file} when status in ~w[added changed]a <- files_diff do
         file
       end
 
+    caller = self()
     result =
       ElixirCompiler.parallel_compile(added_and_changed,
         # Code options
@@ -117,10 +118,10 @@ defmodule Tria.Compiler do
 
         # ParallelCompiler options
         dest: build_path,
-        each_module: fn file, module, bytecode ->
+        each_module: fn file, module, beam ->
           Debug.inspect(module, label: :each_module)
-          Beam.store_object_code(module, bytecode)
-          send(caller, {:last_cycle_compiled, {module, bytecode, file}})
+          Beam.store_object_code(module, beam)
+          send(caller, {:last_cycle_compiled, {module, beam, file}})
         end,
         each_cycle: fn graphs ->
           modules =
@@ -172,7 +173,6 @@ defmodule Tria.Compiler do
       |> Manifest.apply_diff(files_diff)
       |> Manifest.update_file_to_modules(file_to_modules)
 
-    ContextServer.restore(opts.context)
     ContextServer.emit_difference(opts.context, new_modules, removed_modules, changed_modules)
 
     modules =

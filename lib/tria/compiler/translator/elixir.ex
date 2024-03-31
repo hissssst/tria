@@ -97,6 +97,29 @@ defmodule Tria.Compiler.ElixirTranslator do
   @doc """
   Returns full module atom from an alias
   """
+  # Here I don't write `%Macro.Env{}` because sometime I use field-polymorphic structure
+  @spec unalias(Macro.t(), Macro.Env.t() | map()) :: module() | Macro.t()
+  def unalias(module, _env) when is_atom(module), do: module
+  def unalias({:__aliases__, _, [{:__MODULE__, _, _} | tail]}, %{module: module} = env) do
+    unalias({:__aliases__, [], [module | tail]}, env)
+  end
+  def unalias({:__aliases__, _, [module | tail]} = aliased, %{aliases: aliases} = env) do
+    case Keyword.fetch(aliases, Module.concat([module])) do
+      {:ok, found} ->
+        Module.concat([found | tail])
+
+      :error ->
+        case Macro.expand(aliased, env) do
+          module when is_atom(module) ->
+            module
+
+          other ->
+            unalias(other)
+        end
+    end
+  end
+  def unalias(other, _env), do: other
+
   @spec unalias(Macro.t()) :: module() | Macro.t()
   def unalias({:__aliases__, meta, names} = ast) when is_aliases(ast) do
     if the_alias = meta[:alias], do: the_alias, else: Module.concat(names)
@@ -792,28 +815,6 @@ defmodule Tria.Compiler.ElixirTranslator do
     versioned_vars = Map.put(versioned_vars, {name, context}, max_version + 1)
     %Macro.Env{env | versioned_vars: versioned_vars}
   end
-
-  # Here I don't write Macro.Env because sometime I use field-polymorphic structure
-  defp unalias(module, _env) when is_atom(module), do: module
-  defp unalias({:__aliases__, _, [{:__MODULE__, _, _} | tail]}, %{module: module} = env) do
-    unalias({:__aliases__, [], [module | tail]}, env)
-  end
-  defp unalias({:__aliases__, _, [module | tail]} = aliased, %{aliases: aliases} = env) do
-    case Keyword.fetch(aliases, Module.concat([module])) do
-      {:ok, found} ->
-        Module.concat([found | tail])
-
-      :error ->
-        case Macro.expand(aliased, env) do
-          module when is_atom(module) ->
-            module
-
-          other ->
-            unalias(other)
-        end
-    end
-  end
-  defp unalias(other, _env), do: other
 
   defp normalize_alias_to({:__aliases__, _, modules}), do: Module.concat(modules)
   defp normalize_alias_to(module), do: Module.concat([module])

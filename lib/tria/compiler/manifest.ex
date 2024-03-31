@@ -1,5 +1,4 @@
 defmodule Tria.Compiler.Manifest do
-
   @moduledoc """
   Compiler manifest.
 
@@ -20,6 +19,7 @@ defmodule Tria.Compiler.Manifest do
   @tria_version Tria.MixProject.project[:version]
 
   defstruct [
+    new: true,
     tria_version: @tria_version,
     file_inputs: %{},
     file_to_modules: %{},

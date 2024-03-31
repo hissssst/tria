@@ -50,7 +50,7 @@ defmodule Tria.Compiler.ContextServer do
   Mark `module` ready. Context module can only be generated
   when all modules are ready
   """
-  @spec mark_ready(t(), module()) :: :ok
+  @spec mark_ready(t(), module()) :: :ok | :error
   def mark_ready(context, module) do
     call(context, {:ready, module})
   end
@@ -74,9 +74,24 @@ defmodule Tria.Compiler.ContextServer do
   @doc """
   Restores state of the context server from already existing context module
   """
-  @spec restore(t(), Keyword.t()) :: :ok
+  @spec restore(t(), Keyword.t()) :: :ok | :error
   def restore(context, opts \\ []) do
     call(context, {:restore, opts})
+  end
+
+  @doc """
+  Restores state of the context server from already existing context module. Raises on error
+  """
+  @spec restore!(t(), Keyword.t()) :: :ok | no_return()
+  def restore!(context, opts \\ []) do
+    {present, opts} = Keyword.pop!(opts, :present)
+    case restore(context, opts) do
+      :error when present ->
+        raise CompileError, description: "Failed to restore the #{inspect context}"
+
+      _ ->
+        :ok
+    end
   end
 
   @spec emit_difference(t(), Enumerable.t(module()), Enumerable.t(module()), Enumerable.t(module())) :: :ok
@@ -118,14 +133,15 @@ defmodule Tria.Compiler.ContextServer do
     {:reply, :ok, %{state | definitions: definitions}}
   end
 
-  def handle_call({:restore, _opts}, _from, state) do
+  def handle_call({:restore, opts}, _from, state) do
     context = state.name
-    case Beam.object_code(context) do
+    case Beam.object_code_from_path(context, opts[:build_path]) do
       {:ok, object_code} ->
         definitions =
           object_code
           |> Beam.abstract_code!()
           |> Beam.tria_functions()
+          |> Debug.inspect_ast(label: :restored_functions)
           |> Enum.reduce(%{}, fn {{_module, kind, name, arity}, clauses}, acc ->
             {module, name} = Compiler.unfname(name)
             Tracer.tag_ast({:fn, [], clauses}, key: {module, name, arity}, label: :restored)
@@ -201,6 +217,8 @@ defmodule Tria.Compiler.ContextServer do
           unquote_splicing funcs
         end
       end
+
+    Debug.inspect_ast(module, label: :context_module)
 
     if Debug.debugging?(:write_tria) do
       File.write!("tria_global_context.ex", ast_to_string(module))

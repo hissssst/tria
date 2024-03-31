@@ -23,10 +23,12 @@ defmodule Tria.Language.Tri do
   - `:to_ssa` — translates the pattern to SSA form (default: `false`)
   - `:isolate` — defines that the variables should not be fetches from outer context (default: `false`)
   - `:meta` — whether meta field should be empty in pattern or in AST
+  - `:unalias` — whether to remove `{:__aliases__, _, _}` tuples
   """
   @type option :: {:debug, atom()}
   | {:to_tria, :force | true | false}
   | {:to_ssa, boolean()}
+  | {:unalias, boolean()}
   | {:isolate, boolean()}
   | {:meta, boolean()}
 
@@ -86,6 +88,7 @@ defmodule Tria.Language.Tri do
 
   defp to_pattern(quoted, opts, env) do
     quoted
+    |> maybe_unalias(env, opts)
     |> then(fn quoted ->
       case opts[:to_tria] do
         :force -> ElixirTranslator.to_tria!(quoted)
@@ -106,6 +109,7 @@ defmodule Tria.Language.Tri do
 
   defp to_quote(code, opts, %Macro.Env{versioned_vars: versioned_vars} = env) do
     code
+    |> maybe_unalias(env, opts)
     |> maybe_translate(env, opts)
     |> Macro.escape()
     |> then(fn x ->
@@ -147,6 +151,14 @@ defmodule Tria.Language.Tri do
       ElixirTranslator.from_tria(tria, env)
     else
       tria
+    end
+  end
+
+  defp maybe_unalias(ast, env, opts) do
+    if Keyword.get(opts, :unalias, false) do
+      Macro.prewalk(ast, &ElixirTranslator.unalias(&1, env))
+    else
+      ast
     end
   end
 

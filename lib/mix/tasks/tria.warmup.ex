@@ -46,7 +46,15 @@ defmodule Mix.Tasks.Tria.Warmup do
   alias Tria.Language.Analyzer.Purity
 
   def run(args) when is_list(args) do
-    run parse_args args
+    {functions, modules} = run parse_args args
+
+    IO.write [
+      IO.ANSI.clear_line(),
+      IO.ANSI.green(),
+      "\nWarmup completed",
+      IO.ANSI.reset(),
+      "\nChecked #{functions} functions in #{modules - 1} modules\n"
+    ]
   end
 
   def run(%{from: :loaded}) do
@@ -64,7 +72,7 @@ defmodule Mix.Tasks.Tria.Warmup do
   def check(modules) do
     length = length modules
 
-    Enum.reduce(modules, 1, fn module, index ->
+    Enum.reduce(modules, {0, 1}, fn module, {all_functions, index} ->
       with(
         {:ok, object_code} <- Beam.object_code(module),
         {:ok, abstract_code} <- Beam.abstract_code(object_code)
@@ -87,8 +95,13 @@ defmodule Mix.Tasks.Tria.Warmup do
           {findex + 1, now}
         end)
       end
+      |> case do
+        {functions, _} ->
+          {all_functions + functions, index + 1}
 
-      index + 1
+        _ ->
+          {all_functions, index + 1}
+      end
     end)
   end
 

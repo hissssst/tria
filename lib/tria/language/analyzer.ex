@@ -39,6 +39,10 @@ defmodule Tria.Language.Analyzer do
       :error ->
         nil
     end
+  rescue
+    error ->
+      IO.inspect mfarity, label: :failed
+      reraise error, __STACKTRACE__
   end
 
 end

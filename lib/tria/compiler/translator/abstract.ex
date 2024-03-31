@@ -105,14 +105,16 @@ defmodule Tria.Compiler.AbstractTranslator do
         |> postwalk(&with_meta(&1, meta))
 
       # List comprehension
-      {:lc, anno, body, [{:b_generate, banno, bin, input}]} ->
-        {:<<>>, _, bin} = traverse(bin)
-        {last, heading} = List.pop_at(bin, -1)
-        input = traverse(input)
-        {:for, meta(anno), [{:<<>>, meta(banno), heading ++ [{:"<-", [], [last, input]}]}, [do: traverse_block body]]}
-
       {:lc, anno, body, loops} ->
-        {:for, meta(anno), traverse(loops) ++ [[do: traverse_block body]]}
+        {:for, meta(anno), traverse_loops(loops) ++ [[do: traverse_block body]]}
+
+      # Map comprehension
+      {:mc, anno, {:map_field_assoc, _anno, left, right}, loops} ->
+        meta = meta(anno)
+        left = traverse_block(left)
+        right = traverse_block(right)
+        traversed_loops = traverse_loops(loops)
+        {:for, meta, traversed_loops ++ [[into: {:%{}, meta, []}, do: {left, right}]]}
 
       {:block, anno, block} ->
         {:__block__, meta(anno), Enum.map(block, &traverse/1)}
@@ -173,6 +175,9 @@ defmodule Tria.Compiler.AbstractTranslator do
         {:"<-", meta(anno), [traverse(left), traverse(right)]}
 
       {:b_generate, anno, left, right} ->
+        {:"<-", meta(anno), [traverse(left), traverse(right)]}
+
+      {:m_generate, anno, left, right} ->
         {:"<-", meta(anno), [traverse(left), traverse(right)]}
 
       # Binary
@@ -338,6 +343,34 @@ defmodule Tria.Compiler.AbstractTranslator do
   end
 
   ## Context-specific traversal
+
+  ### Comprehension loops
+
+  defguardp is_generate(g) when g in ~w[generate m_generate]a
+
+  def traverse_loops([]), do: []
+  def traverse_loops([loop | loops]) do
+    loop =
+      case loop do
+        {:b_generate, anno, binary, iterable} ->
+          {:<<>>, _, traversed_binary} = traverse(binary)
+          {last, heading} = List.pop_at(traversed_binary, -1)
+          iterable = traverse(iterable)
+          meta = meta(anno)
+          {:<<>>, meta, heading ++ [{:"<-", anno, [last, iterable]}]}
+
+        {g, anno, {:map_field_exact, _mfe_anno, left, right}, iterable} when is_generate(g) ->
+          {:"<-", meta(anno), [{traverse(left), traverse(right)}, traverse(iterable)]}
+
+        {g, anno, item, iterable} when is_generate(g) ->
+          {:"<-", meta(anno), [traverse(item) , traverse(iterable)]}
+
+        other ->
+          traverse(other)
+      end
+
+    [loop | traverse_loops(loops)]
+  end
 
   ### Try
 

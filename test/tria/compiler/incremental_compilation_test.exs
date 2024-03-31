@@ -15,6 +15,44 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
     {:ok, project: project}
   end
 
+  test "basic", %{project: project} do
+    write_ast(project, "lib/x.ex", quote do
+      defmodule X do
+        def f(x), do: x + 1
+      end
+    end)
+
+    write_ast(project, "test/subject/x_test.exs", quote do
+      defmodule XGTest do
+        use ExUnit.Case, async: true
+
+        test "X.f(1) == 2" do
+          assert X.f(1) == 2
+        end
+      end
+    end)
+
+    assert MixTester.mix_test(project)
+
+    write_ast(project, "lib/x.ex", quote do
+      defmodule X do
+        def f(x), do: x + 2
+      end
+    end)
+
+    write_ast(project, "test/subject/x_test.exs", quote do
+      defmodule XGTest do
+        use ExUnit.Case, async: true
+
+        test "X.f(1) == 3" do
+          assert X.f(1) == 3
+        end
+      end
+    end)
+
+    assert MixTester.mix_cmd(project, "test")
+  end
+
   test "Compiles and recompiles macros", %{project: project} do
     write_ast(project, "lib/x.ex", quote do
       defmodule X do
@@ -58,7 +96,7 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
       end
     end)
 
-    assert {_, 0} = MixTester.mix_cmd(project, "test")
+    assert MixTester.mix_test(project)
 
     write_ast(project, "lib/z.ex", quote do
       defmodule Z do
@@ -68,7 +106,9 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
       end
     end)
 
-    assert {_, 2} = MixTester.mix_cmd(project, "test")
+    ExUnit.CaptureIO.capture_io(fn ->
+      refute MixTester.mix_test(project)
+    end)
 
     write_ast(project, "test/subject/x_f_test.exs", quote do
       defmodule XFTest do
@@ -80,7 +120,7 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
       end
     end)
 
-    assert {_, 0} = MixTester.mix_cmd(project, "test")
+    assert MixTester.mix_test(project)
   end
 
   test "constant evaluation", %{project: project} do
@@ -105,7 +145,7 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
       end
     end)
 
-    assert {_, 0} = MixTester.mix_cmd(project, "test")
+    assert MixTester.mix_test(project)
 
     write_ast(project, "lib/x.ex", quote do
       defmodule X do
@@ -122,7 +162,7 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
       end
     end)
 
-    assert {_, 0} = MixTester.mix_cmd(project, "test")
+    assert MixTester.mix_test(project)
   end
 
   test "function to macro", %{project: project} do
@@ -148,7 +188,7 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
       end
     end)
 
-    assert {_, 0} = MixTester.mix_cmd(project, "test")
+    assert MixTester.mix_test(project)
 
     write_ast(project, "lib/x.ex", quote do
       defmodule X do
@@ -165,7 +205,7 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
       end
     end)
 
-    assert {_, 0} = MixTester.mix_cmd(project, "test")
+    assert MixTester.mix_test(project)
 
     write_ast(project, "lib/x.ex", quote do
       defmodule X do
@@ -182,7 +222,7 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
       end
     end)
 
-    assert {_, 0} = MixTester.mix_cmd(project, "test")
+    assert MixTester.mix_test(project)
   end
 
   test "private calls handled correctly", %{project: project} do
@@ -203,7 +243,7 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
       end
     end)
 
-    assert {_, 0} = MixTester.mix_cmd(project, "test")
+    assert MixTester.mix_test(project)
 
     write_ast(project, "lib/y.ex", quote do
       defmodule Y do
@@ -211,7 +251,7 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
       end
     end)
 
-    assert {_, 0} = MixTester.mix_cmd(project, "test")
+    assert MixTester.mix_test(project)
   end
 
   test "string interpolation works correctly", %{project: project} do
@@ -235,7 +275,7 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
       end
     end)
 
-    assert {_, 0} = MixTester.mix_cmd(project, "test")
+    assert MixTester.mix_test(project)
 
     write_ast(project, "lib/y.ex", quote do
       defmodule Y do
@@ -259,6 +299,6 @@ defmodule Tria.Compiler.IncrementalCompilationTest do
       end
     end)
 
-    assert {_, 0} = MixTester.mix_cmd(project, "test")
+    assert MixTester.mix_test(project)
   end
 end

@@ -66,6 +66,26 @@ defmodule Tria.Language.Beam do
   end
 
   @doc """
+  Fetches obeject_code from module name
+  """
+  @spec object_code_from_path(module(), Path.t()) :: {:ok, object_code()} | :error
+  def object_code_from_path(module, nil) do
+    object_code(module)
+  end
+
+  def object_code_from_path(module, path) do
+    with {:error, _} <- File.read(Path.join(path, "#{module}.beam")) do
+      case :code.get_object_code(module) do
+        {^module, object_code, _filename} ->
+          {:ok, object_code}
+
+        _ ->
+          :error
+      end
+    end
+  end
+
+  @doc """
   Fetches obeject_code from module name in raising manner
   """
   @spec object_code!(module()) :: object_code()

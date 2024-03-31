@@ -467,7 +467,7 @@ defmodule Tria.Optimizer.Pass.EvaluationTest do
         end
         |> run_while()
 
-      assert tri(Kernel.+(tri(^x), tri(^y))) = last_line evaluated
+      assert tri([unalias: true], Kernel.+(tri(^x), tri(^y))) = last_line evaluated
     end
 
     test "maybe case" do

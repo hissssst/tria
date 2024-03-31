@@ -3,10 +3,10 @@ with pkgs;
 let otp = beam.packages.erlangR26;
 in pkgs.mkShell {
   buildInputs = [
-    otp.elixir_1_15
+    otp.elixir_1_16
     otp.erlang
     ((if otp ? elixir-ls then otp.elixir-ls else otp.elixir_ls).override {
-      elixir = otp.elixir_1_15;
+      elixir = otp.elixir_1_16;
     })
   ];
 

@@ -139,6 +139,7 @@ defmodule Mix.Tasks.Compile.Tria do
     |> File.mkdir_p!()
 
     Debug.inspect(manifest, label: :manifest)
+    manifest = %Manifest{manifest | new: false}
 
     File.write!(manifest_path, :erlang.term_to_binary(manifest))
   end
