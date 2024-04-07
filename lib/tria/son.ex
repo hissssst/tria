@@ -25,17 +25,23 @@ defmodule Tria.Son do
 
   it compiles to Elixir and has these special nodes
 
-  1. `pattern`
+  1. `literal`
+  Just a literal expression
+
+  2. `pattern`
   pattern-matching is just an equals expression with one variable `{:target, _, :tria}`
   inside like `{target, _}` which points to another expression as an argument.
   For example `{target, _} --arg1--> x` represents something like `{target, _} = x`
 
-  2. `call`
+  3. `call`
   represents `Module.function/arity` call, pointing to it's arguments
 
-  3. `structure_expression`
+  4. `structure_expression`
   represents basic structure expression, like `[{1, 2}, 1]` represents expression
   like `[{arg(1), arg(2)}, arg(1)]`
+
+  5. `case`
+  respresents control node, similar to case. Points to arg and clauses
 
   ## Vocabulary
 
@@ -46,20 +52,33 @@ defmodule Tria.Son do
   This is intended to be used during compilation to high level languages
   """
 
-  alias Tria.Son.Graph
   alias Tria.Language.Analyzer
-  import Tria.Language
-  import Tria.Language.Tri
-  import Tria.Language.Meta, only: [unmeta: 1]
   alias Tria.Language.Interpreter
+  alias Tria.Son.Graph
+  import Tria.Language
+  import Tria.Language.Meta, only: [unmeta: 1]
+  import Tria.Language.Tri
 
   def test do
     ssa =
       tri to_ssa: true do
-        z = ({x, y} = {1, 2})
-        send(self(), z)
-        z = x + y
-        {z + z, 2, 3, 4, [5, 6, 7, 8]}
+        {meta, path, mod, env} = MapSet.new()
+        case Keyword.fetch(meta, :import) do
+          {:ok, Pathex} ->
+            {:ok, path, Pathex.maybemod(mod)}
+
+          :error ->
+            case Macro.Env.lookup_import(env, {:path, 2}) do
+              [{:macro, Pathex} | _] ->
+                {:ok, path, Pathex.maybemod(mod)}
+
+              _ ->
+                :error
+            end
+
+          _ ->
+            :error
+        end
       end
 
     ssa
@@ -91,16 +110,21 @@ defmodule Tria.Son do
     end)
   end
 
-  def translate(ssa_ast) do
-    state = %{
-      vi: %{},
-      graph: %Graph{}
-    }
+  def translate(ssa_ast, context \\ []) do
+    state = %{vi: %{}, graph: %Graph{}}
+    state =
+      Enum.reduce(context, state, fn variable, %{vi: vi, graph: graph} ->
+        {id, graph} = Graph.add_vertex(graph, :input)
+        vi = Map.put(vi, variable, id)
+        %{vi: vi, graph: graph}
+      end)
 
-    {id, %{graph: graph}} =
+    {id, state} =
       ssa_ast
       |> unmeta()
       |> translate(:start, state)
+
+    %{graph: graph} = deduplicate cleanup state
 
     Graph.add_edge(graph, :end, id, {:arg, 0})
   end
@@ -133,8 +157,8 @@ defmodule Tria.Son do
             {{pattern, value, value_id}, {value_id, state}}
           end)
 
-        # Here we convert the right side into the node in a graph
-        # It will be returned by the whole `left = right` expression
+        # Here we convert the right side of the `=` into the node in a graph
+        # It will be returned as a result of the `left = right` expression
         value_to_id = Map.new(matches, fn {_, value, id} -> {value, id} end)
         {right, id_to_argnum} =
           postwalk(right, %{}, fn tria, id_to_argnum ->
@@ -221,10 +245,34 @@ defmodule Tria.Son do
         { id, %{state | graph: graph} }
 
       # Case
-      # {:case, meta, [arg, [do: clauses]]} ->
-      #   {arg, translations} = run(arg, translations)
-      #   clauses = run_clauses(clauses, translations)
-      #   { {:case, meta, [arg, [{:do, clauses}]]}, translations }
+      {:case, _meta, [arg, [do: clauses]]} ->
+        {arg_id, state} = translate(arg, start, state)
+        {case_id, graph} = Graph.add_vertex(state.graph, {:case, length(clauses)})
+        graph = Graph.add_edge(graph, arg_id, case_id, {:arg, 0})
+        state = %{state | graph: graph}
+
+        {_counter, state} =
+          Enum.reduce(clauses, {0, state}, fn
+            {:->, _, [[{:when, _, _}], _body]}, {_counter, _state} ->
+              raise "Not implemented"
+
+            {:->, _, [[pattern], body]}, {counter, state} ->
+              uniq_var = {:x, [], :erlang.unique_integer([:positive])}
+              state = %{state | vi: Map.put(state.vi, uniq_var, arg_id)}
+              code = {:__block__, [], [{:=, [], [pattern, uniq_var]}, body]}
+              {body_id, state} = translate(code, start, state)
+
+              {clause_id, graph} = Graph.add_vertex(state.graph, {:clause, pattern})
+              graph =
+                graph
+                |> Graph.add_edge(clause_id, body_id, :body)
+                |> Graph.add_edge(case_id, clause_id, {:clause, counter})
+
+              state = %{state | graph: graph}
+              {counter + 1, state}
+          end)
+
+        { case_id, state }
 
       # # Receive
       # {:receive, meta, [[do: clauses]]} ->
@@ -307,7 +355,8 @@ defmodule Tria.Son do
 
       # # Map cons
       # # TODO think about joining in map cons
-      # {:"%{}", map_meta, [{:"|", cons_meta, [map, pairs]}]} ->
+      {:"%{}", _map_meta, [{:"|", _cons_meta, [_map, _pairs]}]} ->
+        raise "Not supported"
       #   {map, map_translations} = run(map, translations)
       #   {pairs, translations} =
       #     Enum.map_reduce(pairs, map_translations, fn {key, value}, new_translations ->
@@ -318,16 +367,48 @@ defmodule Tria.Son do
 
       #   { {:"%{}", map_meta, [{:"|", cons_meta, [map, pairs]}]}, translations }
 
-      # # Map
-      # {:"%{}", meta, pairs} ->
-      #   {pairs, translations} =
-      #     Enum.map_reduce(pairs, translations, fn {key, value}, new_translations ->
-      #       {key, key_translations} = run(key, translations)
-      #       {value, value_translations} = run(value, translations)
-      #       {{key, value}, new_translations <~ key_translations <~ value_translations}
-      #     end)
+      # Map
+      {:"%{}", _meta, pairs} ->
+        {structure_expression_pairs, {_start, state}} =
+          Enum.map_reduce(pairs, {start, state}, fn {key, value}, {start, state} ->
+            pure? = Analyzer.is_pure(key)
+            {key_id, %{graph: graph} = state} = translate(key, start, state)
+            {start, graph} =
+              if pure? do
+                {start, graph}
+              else
+                graph = Graph.add_edge(graph, start, key_id, :before)
+                {key_id, graph}
+              end
+            state = %{state | graph: graph}
 
-      #   { {:"%{}", meta, pairs}, translations }
+            pure? = Analyzer.is_pure(value)
+            {value_id, %{graph: graph} = state} = translate(value, start, state)
+            {start, graph} =
+              if pure? do
+                {start, graph}
+              else
+                graph = Graph.add_edge(graph, start, value_id, :before)
+                {value_id, graph}
+              end
+
+            {{key_id, value_id}, {start, %{state | graph: graph}}}
+          end)
+
+        pairs = Enum.map(0..(length(structure_expression_pairs) - 1), fn i -> {2 * i, 2 * i + 1} end)
+        {id, graph} = Graph.add_vertex(state.graph, {:structure_expression, {:%{}, [], pairs}})
+
+        {_, graph} =
+          Enum.reduce(structure_expression_pairs, {0, graph}, fn {key_id, value_id}, {count, graph} ->
+            graph =
+              graph
+              |> Graph.add_edge(id, key_id, {:arg, count})
+              |> Graph.add_edge(id, value_id, {:arg, count + 1})
+
+            {count + 2, graph}
+          end)
+
+        { id, %{state | graph: graph} }
 
       # # Binary
       # {:"<<>>", meta, items} ->
@@ -437,5 +518,38 @@ defmodule Tria.Son do
       end)
 
     {ids, start, state}
+  end
+
+  def deduplicate(state) do
+    state.graph.i
+    |> Enum.group_by(fn {_key, value} -> value end, fn {key, _value} -> key end)
+    |> Enum.each(fn {_, values} -> if length(values) > 1, do: IO.inspect(values) end)
+
+    state
+  end
+
+  def cleanup(state) do
+    i =
+      Enum.reduce(state.graph.i, state.graph.i, fn {id, {value, links}}, i ->
+        case value do
+          {:structure_expression, 0} ->
+             i = Map.delete(i, id)
+             replacement = Map.fetch!(links, {:arg, 0})
+             Enum.reduce(links, i, fn
+               {{:back, link}, id}, i ->
+                 Map.update!(i, id, fn {value, links} ->
+                   {value, Map.replace!(links, link, replacement)}
+                 end)
+
+               _, i ->
+                 i
+             end)
+
+          _ ->
+            i
+        end
+      end)
+
+    %{state | graph: %{state.graph | i: i}}
   end
 end

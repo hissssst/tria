@@ -87,32 +87,42 @@ defmodule Tria.Son.Graph do
     Enum.map(0..(map_size(args) - 1), fn i -> :erlang.map_get(i, args) end)
   end
 
+  ## Inspection helpers
+
+  def label({:pattern, pattern}) do
+    string =
+      pattern
+      |> Tria.Language.ast_to_string()
+      |> String.replace(<<?">>, <<?\\, ?">>)
+
+    "pattern: #{string}"
+  end
+
+  def label(other) do
+    inspect(other)
+  end
+
   ## Visualization helpers
 
   def to_dot(%__MODULE__{i: i}) do
     fill =
       Enum.reduce(i, "", fn {id, {v, edges}}, acc ->
-        label = inspect(v)
-        {args, befores} =
+        label = label(v)
+        {befores, args} =
           edges
           |> Enum.filter(fn
             {{:back, _}, _} -> false
             _ -> true
           end)
           |> Enum.split_with(fn
-            {{:arg, _}, _} -> true
+            {:before, _} -> true
             _ -> false
           end)
-
-        args =
-          args
-          |> Enum.map(fn {{:arg, n}, v} -> {n, v} end)
-          |> Enum.sort()
 
         [
           acc,
           "#{id} [label=\"#{label}\"]",
-          Enum.map(args, fn {n, arg_id} -> "#{id} -> #{arg_id} [label=#{n}]" end),
+          Enum.map(args, fn {n, arg_id} -> ~s|#{id} -> #{arg_id} [label="#{inspect n}"]| end),
           Enum.map(befores, fn {_, before_id} -> "#{before_id} -> #{id} [style=dotted]" end)
         ]
         |> List.flatten()
@@ -126,6 +136,7 @@ defmodule Tria.Son.Graph do
   end
 
   def visualize(%__MODULE__{} = graph) do
+    IO.inspect graph
     dot = to_dot(graph)
     IO.puts dot
     System.shell("echo '#{dot}' | dot -T svg | imv -")
