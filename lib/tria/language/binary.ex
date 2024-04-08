@@ -50,6 +50,7 @@ defmodule Tria.Language.Binary do
   @doc """
   Traverses inputs of the binary (all except type specifications types)
   Basically, this means that every part of AST which can be defined by variable
+  And that is (as of OTP26) byte or a size specifier input.
   """
   @spec traverse_binary_inputs(Tria.t(), state(), traverse_func()) :: {Tria.t(), state()}
   def traverse_binary_inputs({:<<>>, meta, parts}, state, func) do

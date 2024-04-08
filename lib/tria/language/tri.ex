@@ -134,7 +134,7 @@ defmodule Tria.Language.Tri do
   end
 
   defp maybe_translate(code, env, opts) do
-    if Keyword.get(opts, :to_tria, true) do
+    if Keyword.get(opts, :to_tria, true) || Keyword.get(opts, :to_ssa, false) do
       tria = ElixirTranslator.to_tria!(code, env)
       if Keyword.get(opts, :to_ssa, true) do
         SSATranslator.from_tria! tria

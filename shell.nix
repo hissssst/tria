@@ -4,6 +4,7 @@ let otp = beam.packages.erlangR26;
 in pkgs.mkShell {
   buildInputs = [
     otp.elixir_1_16
+    graphviz-nox
     otp.erlang
     ((if otp ? elixir-ls then otp.elixir-ls else otp.elixir_ls).override {
       elixir = otp.elixir_1_16;

@@ -257,7 +257,7 @@ defmodule Tria.Language do
       |> Macro.to_string()
 
     try do
-      Code.format_string!(unformatted)
+      IO.iodata_to_binary Code.format_string! unformatted
     rescue
       _ -> unformatted
     end
