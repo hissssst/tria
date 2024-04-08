@@ -62,7 +62,7 @@ defmodule Tria.Son do
   def test do
     ssa =
       tri to_ssa: true do
-        {meta, path, mod, env} = MapSet.new()
+        {meta, path, mod, env, env} = MapSet.new()
         case Keyword.fetch(meta, :import) do
           {:ok, Pathex} ->
             {:ok, path, Pathex.maybemod(mod)}
@@ -240,15 +240,15 @@ defmodule Tria.Son do
         { call_id, %{state | graph: graph} }
 
       # Literal
-      literal when is_integer(literal) or is_atom(literal) ->
+      literal when is_integer(literal) or is_atom(literal) or is_binary(literal) ->
         {id, graph} = Graph.add_vertex(graph, {:literal, literal})
         { id, %{state | graph: graph} }
 
       # Case
       {:case, _meta, [arg, [do: clauses]]} ->
         {arg_id, state} = translate(arg, start, state)
-        {case_id, graph} = Graph.add_vertex(state.graph, {:case, length(clauses)})
-        graph = Graph.add_edge(graph, arg_id, case_id, {:arg, 0})
+        {case_id, graph} = Graph.add_vertex(state.graph, :case)
+        graph = Graph.add_edge(graph, case_id, arg_id, {:arg, 0})
         state = %{state | graph: graph}
 
         {_counter, state} =
@@ -483,10 +483,7 @@ defmodule Tria.Son do
         {argids, _start, %{graph: graph} = state} = list_translate(items, start, state)
         {argnums, _} = Enum.map_reduce(argids, 0, fn _, argnum -> {argnum, argnum + 1} end)
         {id, graph} = Graph.add_vertex(graph, {:structure_expression, {:{}, [], argnums}})
-        {graph, _} =
-          Enum.reduce(argids, {graph, 0}, fn argid, {graph, argnum} ->
-            {Graph.add_edge(graph, id, argid, {:arg, argnum}), argnum + 1}
-          end)
+        graph = Graph.add_args_edges(graph, id, argids)
 
         state = %{state | graph: graph}
         { id, state }
@@ -521,35 +518,60 @@ defmodule Tria.Son do
   end
 
   def deduplicate(state) do
-    state.graph.i
-    |> Enum.group_by(fn {_key, value} -> value end, fn {key, _value} -> key end)
-    |> Enum.each(fn {_, values} -> if length(values) > 1, do: IO.inspect(values) end)
+    case deduplicate_once(state) do
+      {state, true} ->
+        deduplicate(state)
 
-    state
+      {state, false} ->
+        state
+    end
+  end
+
+  def deduplicate_once(state) do
+    groups =
+      Enum.group_by(
+        state.graph.i,
+        fn {_key, {value, _}} -> value end,
+        fn {key, _value} -> key end
+      )
+
+    {graph, hit} =
+      for {value, [head | [_ | _] = tail] = all} <- groups, reduce: {state.graph, false} do
+        {graph, hit} ->
+          case value do
+            {:literal, _} ->
+              graph = Graph.join_all(graph, all)
+              {graph, true}
+
+            {x, _mfarity} when x in ~w[call structure_expression]a ->
+              args = Graph.args(graph, head)
+              if Enum.all?(tail, fn id -> Graph.args(graph, id) == args end) do
+                {Graph.join_all(graph, all), true}
+              else
+                {graph, hit}
+              end
+
+            _ ->
+              {graph, hit}
+          end
+      end
+
+    {%{state | graph: graph}, hit}
   end
 
   def cleanup(state) do
-    i =
-      Enum.reduce(state.graph.i, state.graph.i, fn {id, {value, links}}, i ->
+    graph =
+      Enum.reduce(state.graph.i, state.graph, fn {id, {value, links}}, graph ->
         case value do
           {:structure_expression, 0} ->
-             i = Map.delete(i, id)
              replacement = Map.fetch!(links, {:arg, 0})
-             Enum.reduce(links, i, fn
-               {{:back, link}, id}, i ->
-                 Map.update!(i, id, fn {value, links} ->
-                   {value, Map.replace!(links, link, replacement)}
-                 end)
-
-               _, i ->
-                 i
-             end)
+             Graph.join(graph, id, replacement)
 
           _ ->
-            i
+            graph
         end
       end)
 
-    %{state | graph: %{state.graph | i: i}}
+    %{state | graph: graph}
   end
 end
